@@ -1,0 +1,17 @@
+{
+  "name": "gemini-web2api-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run --outdir=dist",
+    "deploy": "wrangler deploy",
+    "version": "wrangler versions upload",
+    "versions": "wrangler versions list",
+    "version:deploy": "wrangler versions deploy",
+    "deployments": "wrangler deployments list"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
