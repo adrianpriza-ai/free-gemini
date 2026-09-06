@@ -1,0 +1,6 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/config-schema.json",
+  "name": "gemini-web2api",
+  "main": "./cloudflare/worker.js",
+  "compatibility_date": "2026-09-06"
+}
