@@ -180,7 +180,7 @@ var DEFAULT_CONFIG = {
   //   3. 切换到 Network（网络）标签
   //   4. 在任意请求的 URL 中搜索 "boq_assistant"
   //   5. 复制最新版本号，如 "boq_assistant-bard-web-server_20260730.02_p0"
-  geminiBl: 'boq_assistant-bard-web-server_20260716.08_p0',
+  geminiBl: 'boq_assistant-bard-web-server_20260909.08_p0',
 
   // ---- 多账户支持 ----
   // Google 支持在同一个浏览器中登录多个账户
@@ -279,33 +279,35 @@ var DEFAULT_CONFIG = {
  */
 
 var USER_AGENTS = [
-  // Chrome 127 on Windows 10/11（占比最高，约 35%）
+  // Chrome 134 on Windows 10/11（占比最高，约 35%）
   // 这是目前最主流的浏览器配置
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-  // Chrome 126 on Windows 10/11（占比约 30%）
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+  // Chrome 133 on Windows 10/11（占比约 28%）
   // 上一版本的 Chrome，仍有大量用户未更新
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  // Safari 17.4 on macOS 14.5（占比约 8%）
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+  // Safari 18.3 on macOS 15.3（占比约 8%）
   // Mac 用户使用系统自带浏览器
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-  // Chrome 127 on macOS 14.5（占比约 10%）
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15',
+  // Chrome 134 on macOS 15.3（占比约 10%）
   // Mac 用户安装 Chrome 浏览器
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-  // Chrome 127 on Linux（占比约 7%）
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+  // Chrome 134 on Linux（占比约 7%）
   // Linux 桌面用户（开发者群体）
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-  // Firefox 128 on Windows（占比约 5%）
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
-  // Firefox 128 on macOS（占比约 3%）
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:128.0) Gecko/20100101 Firefox/128.0',
-  // Firefox 128 on Linux（占比约 2%）
-  'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+  // Firefox 135 on Windows（占比约 5%）
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0',
+  // Firefox 135 on macOS（占比约 3%）
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 15.3; rv:135.0) Gecko/20100101 Firefox/135.0',
+  // Firefox 135 on Linux（占比约 2%）
+  'Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0',
+  // Chrome 132 on Windows（占比约 7%）
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
 ];
 
 // 加权权重数组，与 USER_AGENTS 一一对应
-// 总和 = 35 + 30 + 8 + 10 + 7 + 5 + 3 + 2 = 100
+// 总和 = 35 + 28 + 8 + 10 + 7 + 5 + 3 + 2 + 7 = 105
 // 模拟真实浏览器市场份额：Chrome ~72%, Safari ~8%, Firefox ~10%
-var UA_WEIGHTS = [35, 30, 8, 10, 7, 5, 3, 2];
+var UA_WEIGHTS = [35, 28, 8, 10, 7, 5, 3, 2, 7];
 
 /**
  * 加权随机选择 User-Agent
@@ -384,12 +386,12 @@ function getRandomAcceptLanguage() {
  * - "Chromium";v="127" 表示 Chromium 内核版本号
  */
 var SEC_CH_UA_POOLS = [
-  // Chrome 127
-  '"Not)A;Brand";v="99", "Google Chrome";v="127", "Chromium";v="127"',
-  // Chrome 126
-  '"Not)A;Brand";v="99", "Google Chrome";v="126", "Chromium";v="126"',
-  // Chrome 125
-  '"Not)A;Brand";v="99", "Google Chrome";v="125", "Chromium";v="125"',
+  // Chrome 134
+  '"Not(A:Brand";v="99", "Google Chrome";v="134", "Chromium";v="134"',
+  // Chrome 133
+  '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+  // Chrome 132
+  '"Not(A:Brand";v="99", "Google Chrome";v="132", "Chromium";v="132"',
 ];
 
 /**
@@ -440,10 +442,15 @@ function getRandomSecChUaPlatform() {
 //   4 = AUTO（自动选择思考深度，由 Gemini 决定）
 
 var MODELS = {
+  'gemini-3.7-flash': {
+    mode: 1,        // FAST - 快速模式
+    think: 4,       // AUTO - 自动选择思考深度
+    desc: 'Latest all-around model (Gemini 3.7 Flash)',
+  },
   'gemini-3.6-flash': {
     mode: 1,        // FAST - 快速模式
     think: 4,       // AUTO - 自动选择思考深度
-    desc: 'Latest all-around model (Gemini 3.6 Flash)',
+    desc: 'All-around model (Gemini 3.6 Flash)',
   },
   'gemini-3.5-flash': {
     mode: 1,        // FAST
@@ -474,6 +481,32 @@ var MODELS = {
     mode: 6,        // FLASH_LITE - 轻量快速
     think: 4,       // AUTO
     desc: 'Lightweight fast model',
+  },
+  // ---- Popular aliases for broad client compatibility ----
+  'gemini-2.5-flash': {
+    mode: 1,
+    think: 4,
+    desc: 'Alias → gemini-3.6-flash (client compatibility)',
+  },
+  'gemini-2.5-flash-preview-04-17': {
+    mode: 1,
+    think: 4,
+    desc: 'Alias → gemini-3.6-flash (client compatibility)',
+  },
+  'gemini-2.5-pro': {
+    mode: 3,
+    think: 4,
+    desc: 'Alias → gemini-3.1-pro (client compatibility)',
+  },
+  'gemini-2.0-flash': {
+    mode: 1,
+    think: 4,
+    desc: 'Alias → gemini-3.6-flash (client compatibility)',
+  },
+  'gemini-2.0-flash-exp': {
+    mode: 1,
+    think: 4,
+    desc: 'Alias → gemini-3.6-flash (client compatibility)',
   },
 };
 
@@ -2100,124 +2133,185 @@ async function handleChatCompletions(request, body, config) {
             }
           }, 2000);
 
-          // ---- 第三步：构建并发送 Gemini 请求 ----
+          // ---- 第三步：构建并发送 Gemini 请求（含重试逻辑）----
           var reqBody = buildPayload(prompt, modelId, thinkMode, config);
-          var headers = await buildHeaders(config);
           var url = buildUrl(config);
 
-          // 创建独立的 AbortController 用于超时控制
-          var fetchController = new AbortController();
-          var fetchTimeout = setTimeout(function () {
-            fetchController.abort();  // 超时后中止 fetch 请求
-          }, (config.requestTimeoutSec - 2) * 1000);
+          // 🎭 请求前随机延迟（与非流式保持一致）
+          if (config.fingerprintJitterMs > 0) {
+            var streamJitter = Math.random() * config.fingerprintJitterMs;
+            await new Promise(function (resolve) { setTimeout(resolve, streamJitter); });
+          }
 
-          try {
-            // 发送 HTTP POST 请求到 Gemini
-            var response = await fetch(url, {
-              method: 'POST',
-              headers: headers,
-              body: reqBody,
-              signal: fetchController.signal,
-            });
-            clearTimeout(fetchTimeout);
+          var response = null;
+          var lastStreamError = null;
 
-            // 检查响应状态码
-            if (!response.ok) {
-              var errorText = '';
-              try {
-                errorText = await response.text();
-              } catch (e) {
-                errorText = '无法读取错误信息';
+          // 重试循环（与非流式路径保持一致）
+          for (var streamAttempt = 0; streamAttempt < config.retryAttempts; streamAttempt++) {
+            // 每次尝试重新构建请求头（不同指纹）
+            var headers = await buildHeaders(config);
+            if (streamAttempt > 0) {
+              // 重试时也添加随机延迟
+              if (config.fingerprintJitterMs > 0) {
+                var retryStreamJitter = Math.random() * config.fingerprintJitterMs;
+                await new Promise(function (resolve) { setTimeout(resolve, retryStreamJitter); });
               }
-              throw new Error('HTTP ' + response.status + ': ' + errorText.substring(0, 200));
             }
 
-            // ---- 第四步：读取流式响应并实时转发增量数据 ----
-            var reader = response.body.getReader();
-            var decoder = new TextDecoder();
-            var buffer = '';      // 行缓冲区（处理不完整的行）
-            var prevText = '';    // 记录之前已发送的完整文本
+            // 创建独立的 AbortController 用于超时控制
+            var fetchController = new AbortController();
+            var fetchTimeout = setTimeout(function () {
+              fetchController.abort();  // 超时后中止 fetch 请求
+            }, (config.requestTimeoutSec - 2) * 1000);
 
-            while (true) {
-              var readResult = await reader.read();
-              if (readResult.done) break;  // 流结束
+            try {
+              // 发送 HTTP POST 请求到 Gemini
+              var attemptResponse = await fetch(url, {
+                method: 'POST',
+                headers: headers,
+                body: reqBody,
+                signal: fetchController.signal,
+              });
+              clearTimeout(fetchTimeout);
 
-              // 解码新数据并追加到缓冲区
-              buffer += decoder.decode(readResult.value, { stream: true });
-
-              // 检查 Gemini 错误信息
-              if (buffer.indexOf('BardErrorInfo') !== -1) {
-                var match = buffer.match(/BardErrorInfo\s*\[(\d+)\]/);
-                if (match) {
-                  throw new Error('Gemini upstream rejected request: BardErrorInfo [' + match[1] + ']');
-                }
+              // 检查响应状态码
+              if (attemptResponse.status === 405) {
+                lastStreamError = new Error('HTTP 405: Method Not Allowed - 可能 BL 版本过期，请更新 GEMINI_BL');
+                break; // 405 无法通过重试解决
               }
 
-              // 按行分割处理（Gemini 的响应是每行一个 JSON）
-              var lines = buffer.split('\n');
-              // 最后一行可能不完整，保留在缓冲区中
-              buffer = lines.pop() || '';
+              if (attemptResponse.status === 429) {
+                var retryAfter = parseInt(attemptResponse.headers.get('Retry-After') || '5', 10);
+                log('流式请求收到 429，等待 ' + retryAfter + ' 秒后重试...', 'WARN', config);
+                lastStreamError = new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
+                if (streamAttempt < config.retryAttempts - 1) {
+                  await new Promise(function (resolve) { setTimeout(resolve, retryAfter * 1000); });
+                  continue;
+                }
+                break;
+              }
 
-              // 遍历每一行完整的数据
-              for (var li = 0; li < lines.length; li++) {
-                var line = lines[li];
-                // 跳过不包含数据标记的行或太短的行
-                if (line.indexOf('"wrb.fr"') === -1 || line.length < 200) continue;
-
+              if (!attemptResponse.ok) {
+                var errorText = '';
                 try {
-                  // 解析 Gemini 的嵌套 JSON 响应
-                  var arr = JSON.parse(line);
-                  var innerStr = arr[0][2];
-                  if (!innerStr || innerStr.length < 50) continue;
+                  errorText = await attemptResponse.text();
+                } catch (e) {
+                  errorText = '无法读取错误信息';
+                }
+                lastStreamError = new Error('HTTP ' + attemptResponse.status + ': ' + errorText.substring(0, 200));
+                // 对于其他错误，也进行指数退避重试
+                if (streamAttempt < config.retryAttempts - 1) {
+                  var errDelay = config.retryDelaySec * Math.pow(2, streamAttempt) * 1000;
+                  log('流式请求失败，重试 ' + (streamAttempt + 1) + '/' + config.retryAttempts, 'WARN', config);
+                  await new Promise(function (resolve) { setTimeout(resolve, errDelay); });
+                  continue;
+                }
+                break;
+              }
 
-                  var inner2 = JSON.parse(innerStr);
+              // 请求成功，退出重试循环
+              response = attemptResponse;
+              lastStreamError = null;
+              break;
 
-                  // 提取文本内容
-                  if (Array.isArray(inner2) && inner2.length > 4 && inner2[4]) {
-                    var parts = inner2[4];
-                    for (var pi = 0; pi < parts.length; pi++) {
-                      var part = parts[pi];
-                      if (Array.isArray(part) && part.length > 1 && part[1] && Array.isArray(part[1])) {
-                        var textItems = part[1];
-                        for (var ti = 0; ti < textItems.length; ti++) {
-                          var t = textItems[ti];
-                          // 检查是否有新内容（文本长度增加了）
-                          if (typeof t === 'string' && t.length > prevText.length) {
-                            // 🔑 计算增量文本
-                            // 增量 = 当前完整文本 - 之前已发送的完整文本
-                            var delta = t.slice(prevText.length);
-                            // 清理代码执行痕迹（不 trim，保留空白格式）
-                            var cleaned = cleanGeminiText(delta, false);
-                            if (cleaned) {
-                              // 立即将增量块推送给客户端（打字机效果）
-                              controller.enqueue(streamEncoder.encode('data: ' + JSON.stringify({
-                                id: chatId,
-                                object: 'chat.completion.chunk',
-                                created: timestamp(),
-                                model: modelName,
-                                choices: [{
-                                  index: 0,
-                                  delta: { content: cleaned },
-                                  finish_reason: null
-                                }],
-                              }) + '\n\n'));
-                            }
-                            // 更新已发送的文本记录
-                            prevText = t;
+            } catch (fetchErr) {
+              clearTimeout(fetchTimeout);
+              lastStreamError = fetchErr;
+              if (streamAttempt < config.retryAttempts - 1) {
+                var fetchDelay = config.retryDelaySec * Math.pow(2, streamAttempt) * 1000;
+                log('流式请求异常，重试 ' + (streamAttempt + 1) + '/' + config.retryAttempts + ': ' + fetchErr.message, 'WARN', config);
+                await new Promise(function (resolve) { setTimeout(resolve, fetchDelay); });
+              }
+            }
+          }
+
+          // 所有重试失败，抛出最后的错误
+          if (!response) {
+            throw lastStreamError || new Error('流式请求失败，所有重试已耗尽');
+          }
+
+          // ---- 第四步：读取流式响应并实时转发增量数据 ----
+          var reader = response.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = '';      // 行缓冲区（处理不完整的行）
+          var prevText = '';    // 记录之前已发送的完整文本
+
+          while (true) {
+            var readResult = await reader.read();
+            if (readResult.done) break;  // 流结束
+
+            // 解码新数据并追加到缓冲区
+            buffer += decoder.decode(readResult.value, { stream: true });
+
+            // 检查 Gemini 错误信息
+            if (buffer.indexOf('BardErrorInfo') !== -1) {
+              var match = buffer.match(/BardErrorInfo\s*\[(\d+)\]/);
+              if (match) {
+                throw new Error('Gemini upstream rejected request: BardErrorInfo [' + match[1] + ']');
+              }
+            }
+
+            // 按行分割处理（Gemini 的响应是每行一个 JSON）
+            var lines = buffer.split('\n');
+            // 最后一行可能不完整，保留在缓冲区中
+            buffer = lines.pop() || '';
+
+            // 遍历每一行完整的数据
+            for (var li = 0; li < lines.length; li++) {
+              var line = lines[li];
+              // 跳过不包含数据标记的行或太短的行
+              if (line.indexOf('"wrb.fr"') === -1 || line.length < 200) continue;
+
+              try {
+                // 解析 Gemini 的嵌套 JSON 响应
+                var arr = JSON.parse(line);
+                var innerStr = arr[0][2];
+                if (!innerStr || innerStr.length < 50) continue;
+
+                var inner2 = JSON.parse(innerStr);
+
+                // 提取文本内容
+                if (Array.isArray(inner2) && inner2.length > 4 && inner2[4]) {
+                  var parts = inner2[4];
+                  for (var pi = 0; pi < parts.length; pi++) {
+                    var part = parts[pi];
+                    if (Array.isArray(part) && part.length > 1 && part[1] && Array.isArray(part[1])) {
+                      var textItems = part[1];
+                      for (var ti = 0; ti < textItems.length; ti++) {
+                        var t = textItems[ti];
+                        // 检查是否有新内容（文本长度增加了）
+                        if (typeof t === 'string' && t.length > prevText.length) {
+                          // 🔑 计算增量文本
+                          // 增量 = 当前完整文本 - 之前已发送的完整文本
+                          var delta = t.slice(prevText.length);
+                          // 清理代码执行痕迹（不 trim，保留空白格式）
+                          var cleaned = cleanGeminiText(delta, false);
+                          if (cleaned) {
+                            // 立即将增量块推送给客户端（打字机效果）
+                            controller.enqueue(streamEncoder.encode('data: ' + JSON.stringify({
+                              id: chatId,
+                              object: 'chat.completion.chunk',
+                              created: timestamp(),
+                              model: modelName,
+                              choices: [{
+                                index: 0,
+                                delta: { content: cleaned },
+                                finish_reason: null
+                              }],
+                            }) + '\n\n'));
                           }
+                          // 更新已发送的文本记录
+                          prevText = t;
                         }
                       }
                     }
                   }
-                } catch (e) {
-                  // JSON 解析错误，继续处理下一行
-                  // Gemini 的响应可能在传输中被截断
                 }
+              } catch (e) {
+                // JSON 解析错误，继续处理下一行
+                // Gemini 的响应可能在传输中被截断
               }
             }
-          } finally {
-            // 无论成功还是失败，确保清除超时定时器
-            clearTimeout(fetchTimeout);
           }
 
           // ---- 第五步：正常结束流 ----
@@ -2586,10 +2680,13 @@ export default {
       if (path === '/' || path === '/health') {
         return sendJSON({
           status: 'ok',
-          version: '1.5.0-cf-multifingerprint',
+          version: '1.6.0-cf-multifingerprint',
           platform: 'Cloudflare Workers',
           models: Object.keys(MODELS),
           defaultModel: config.defaultModel,
+          geminiBl: config.geminiBl,
+          hasCookie: !!config.cookieString,
+          hasSapisid: !!config.sapisid,
         });
       }
 
