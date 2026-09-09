@@ -1,0 +1,306 @@
+# Gemini Web2API - Cloudflare Workers Deployment Documentation
+
+[中文文档](cloudflare/README_CN.md)
+
+## 📖 Project Introduction
+
+Gemini Web2API is a serverless proxy service deployed on Cloudflare Workers that converts the Google Gemini web interface into an OpenAI-compatible API interface. No server required, no API Key needed (optional), ready to use out of the box.
+
+### Core Features
+
+- **Zero-cost deployment**: Based on Cloudflare Workers free plan (100,000 requests per day)
+- **Global acceleration**: Automatically deployed to Cloudflare's 300+ global edge nodes
+- **OpenAI compatible**: Fully compatible with `/v1/chat/completions` and `/v1/models` endpoints
+- **Typewriter streaming output**: True SSE (Server-Sent Events) streaming response
+- **Multi-fingerprint rotation**: 8 browser fingerprints + 6 language preferences randomly rotated to reduce detection probability
+- **Multi-Cookie rotation**: Supports configuring multiple Google account cookies, randomly selected for use
+- **Concurrent safety**: Request-level configuration isolation, completely eliminating configuration crosstalk in high-concurrency scenarios
+- **Tool call support**: Compatible with OpenAI Function Calling format
+
+### Applicable Scenarios
+
+- Provide free Gemini API for NextChat, Cherry Studio, ChatBox and other clients
+- Used as Gemini model backend in tools like WorkBuddy
+- Personal learning, research and small project AI capability access
+
+---
+
+## 🚀 Quick Deployment
+
+### Step 1: Log in to Cloudflare
+
+1. Open [Cloudflare Dashboard](https://dash.cloudflare.com)
+2. Log in to your Cloudflare account (free registration available if you don't have one)
+3. Go to the left menu **Workers & Pages**
+
+### Step 2: Create Worker
+
+1. Click **Create Application** → **Create Worker**
+2. Give your Worker a name (e.g., `api`)
+3. Click the **Deploy** button
+4. Click the **Edit Code** button
+5. Clear the default code in the editor
+6. Paste the complete project code into the editor
+7. Click **Save and Deploy** in the top right corner
+
+### Step 3: Get Test Address
+
+After successful deployment, your API address is:
+
+```
+https://your-worker-name.your-account-name.workers.dev
+```
+
+For example: `https://api.geminai.workers.dev`
+
+### Step 4: Verify Deployment
+
+Visit the following address in your browser:
+
+```
+https://your-worker.workers.dev/health
+```
+
+If you see a JSON response similar to the following, deployment is successful:
+
+```json
+{
+  "status": "ok",
+  "version": "1.5.0-cf-multifingerprint",
+  "platform": "Cloudflare Workers",
+  "models": ["gemini-3.6-flash", "gemini-3.5-flash", "..."],
+  "hasCookie": false,
+  "hasSapisid": false
+}
+```
+
+---
+
+## 🔧 Client Configuration
+
+### NextChat (ChatGPT-Next-Web)
+
+| Configuration Item | Value |
+|--------------------|-------|
+| Interface Type | OpenAI |
+| Interface Address | `https://your-worker.workers.dev/v1` |
+| API Key | `sk-gemini` (default key) |
+| Model | `gemini-3.6-flash` |
+
+### Cherry Studio
+
+| Configuration Item | Value |
+|--------------------|-------|
+| API Address | `https://your-worker.workers.dev/v1` |
+| API Key | `sk-gemini` |
+| Model | `gemini-3.6-flash` |
+
+### ChatBox
+
+| Configuration Item | Value |
+|--------------------|-------|
+| API Mode | OpenAI API |
+| API Domain | `https://your-worker.workers.dev` |
+| API Path | `/v1/chat/completions` |
+| API Key | `sk-gemini` |
+
+### Using curl for Testing
+
+```bash
+# Non-streaming request
+curl https://your-worker.workers.dev/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-gemini" \
+  -d '{
+    "model": "gemini-3.6-flash",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": false
+  }'
+
+# Streaming request (typewriter effect)
+curl -N https://your-worker.workers.dev/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-gemini" \
+  -d '{
+    "model": "gemini-3.6-flash",
+    "messages": [{"role": "user", "content": "Tell me a story"}],
+    "stream": true
+  }'
+```
+
+---
+
+## ⚙️ Environment Variable Configuration (Optional)
+
+Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → Variables → Environment Variables:
+
+### Authentication Related
+
+| Variable Name | Description | Example Value |
+|---------------|-------------|---------------|
+| `COOKIE_STRING` | Gemini Cookie, multiple separated by `\|` | `cookie1\| cookie2\| cookie3` |
+| `SAPISID` | SAPISID value, multiple separated by `\|` | `sapisid1\| sapisid2\| sapisid3` |
+| `API_KEY` / `API_KEYS` | API Key, supports single string, comma/pipe-separated multiple keys, or JSON array | `my-secret-key` or `key1, key2` or `["sk-gemini", "my-key"]` |
+
+### Gemini Configuration
+
+| Variable Name | Description | Example Value |
+|---------------|-------------|---------------|
+| `GEMINI_BL` | Gemini build tag (update when encountering 405) | `boq_assistant-bard-web-server_20260907.07_p0` |
+| `DEFAULT_MODEL` | Default model | `gemini-3.6-flash` |
+| `AUTH_USER` | Multi-account index | `0` |
+
+### Performance Optimization
+
+| Variable Name | Description | Default Value |
+|---------------|-------------|---------------|
+| `RETRY_ATTEMPTS` | Retry attempts | `3` |
+| `RETRY_DELAY_SEC` | Retry interval (seconds) | `2` |
+| `REQUEST_TIMEOUT_SEC` | Request timeout (seconds) | `28` |
+| `FINGERPRINT_JITTER_MS` | Random delay maximum value (milliseconds) | `1500` |
+| `RATE_LIMIT_MAX` | Rate limit maximum request count | `3000` |
+| `RATE_LIMIT_WINDOW` | Rate limit time window (seconds) | `60` |
+
+---
+
+## 🍪 How to Get Gemini Cookie
+
+### Why Do You Need Cookie?
+
+Anonymous requests are easily rate-limited by Gemini (returning HTTP 429 error). Configuring valid Cookie can:
+- Significantly reduce the probability of being rate-limited
+- Improve Pro model routing quality
+- Obtain a more stable service experience
+
+### Obtaining Steps
+
+1. Open Chrome/Edge browser
+2. Visit https://gemini.google.com/app and log in to your Google account
+3. Press **F12** to open developer tools
+4. Go to the **Application** tab
+5. On the left, select **Cookies** → `https://gemini.google.com`
+6. Find the following Cookies and copy their values:
+   - `__Secure-1PSID`
+   - `__Secure-3PSID`
+   - `SAPISID`
+7. Combine into a complete Cookie string:
+   ```
+   __Secure-1PSID=your_value; __Secure-3PSID=your_value; SAPISID=your_value
+   ```
+
+### Multi-account Configuration
+
+If you have multiple Google accounts, you can separate multiple Cookies with `|`:
+
+```
+COOKIE_STRING = "cookie_account1| cookie_account2| cookie_account3"
+SAPISID = "sapisid_1| sapisid_2| sapisid_3"
+```
+
+Each request will randomly select a Cookie to use, greatly reducing the probability of a single account being rate-limited.
+
+---
+
+## 🔄 Updating BL Version
+
+If you encounter `HTTP 405: Method Not Allowed` error, it means the Gemini frontend has been updated, and you need to synchronize the build tag update:
+
+1. Open https://gemini.google.com/app in browser
+2. Press **F12** → **Network** tab
+3. Search for `boq_assistant` in any request's URL
+4. Copy the latest version number, for example:
+   ```
+   boq_assistant-bard-web-server_20260730.02_p0
+   ```
+5. Update the environment variable `GEMINI_BL` or the `geminiBl` configuration item in the code
+
+---
+
+## 🎭 Multi-fingerprint Rotation Mechanism
+
+This program has a built-in browser fingerprint rotation system, where each request randomly selects different browser identifiers:
+
+| Fingerprint Type | Pool Size | Description |
+|------------------|-----------|-------------|
+| User-Agent | 8 types | Weighted random, simulating real browser market share |
+| Accept-Language | 6 types | Uniform random, simulating users from different regions |
+| Sec-Ch-Ua | 3 types | Chrome version identifier (only added when Chrome UA) |
+| Random Delay | 0-1500ms | Add random delay before request to simulate human operation |
+
+---
+
+## 🛡️ Security Recommendations
+
+1. **Modify default API Key**: Change `sk-gemini` in `apiKeys` to your own key
+2. **Set rate limiting**: Adjust `RATE_LIMIT_MAX` based on actual usage
+3. **Regularly update Cookie**: Google Cookies expire and need regular replacement
+4. **Do not share Cookie**: Cookie is equivalent to your Google account credentials
+
+---
+
+## ❓ Frequently Asked Questions
+
+### Q: Returns `empty response from server`
+
+**Cause**: NextChat streaming parsing issue.  
+**Solution**: Make sure you're using the latest version of the code (SSE format has been fixed).
+
+### Q: Returns `HTTP 429: Too Many Requests`
+
+**Cause**: Gemini rate limiting, anonymous request frequency limits are stricter.  
+**Solution**: Configure valid `COOKIE_STRING` and `SAPISID`.
+
+### Q: Returns `HTTP 405: Method Not Allowed`
+
+**Cause**: BL version expired.  
+**Solution**: Update `geminiBl` configuration (see the "Updating BL Version" section above).
+
+### Q: Returns `invalid api key`
+
+**Cause**: Client API Key configuration error.  
+**Solution**: Check if the client is configured with the correct API Key (default `sk-gemini`).
+
+### Q: WorkBuddy usage shows crosstalk
+
+**Cause**: Multi-model concurrent requests share global configuration.  
+**Solution**: Current version has resolved this issue through request-level configuration isolation.
+
+---
+
+## 📊 Supported Model List
+
+| Model ID | Type | Description |
+|----------|------|-------------|
+| `gemini-3.7-flash` | FAST | Latest all-round model (Gemini 3.7 Flash) |
+| `gemini-3.6-flash` | FAST | All-round model (Gemini 3.6 Flash) |
+| `gemini-3.5-flash` | FAST | Alias for 3.6 Flash |
+| `gemini-3.5-flash-thinking` | THINKING | Deep thinking mode |
+| `gemini-3.1-pro` | PRO | Professional version (requires Cookie) |
+| `gemini-auto` | AUTO | Automatic model selection |
+| `gemini-3.5-flash-thinking-lite` | DYNAMIC | Adaptive dynamic thinking |
+| `gemini-flash-lite` | LITE | Lightweight fast model |
+| `gemini-2.5-flash` | FAST | Client compatibility alias (routes to 3.6 Flash) |
+| `gemini-2.0-flash` | FAST | Client compatibility alias (routes to 3.6 Flash) |
+| `gemini-2.5-pro` | PRO | Client compatibility alias (routes to 3.1 Pro) |
+
+Supports overriding thinking mode via `@think=` parameter:
+- `gemini-3.6-flash@think=0` — Flash model + deep thinking
+- `gemini-3.1-pro@think=4` — Pro model + automatic thinking
+
+---
+
+## 📝 Changelog
+
+| Version | Date | Update Content |
+|---------|------|----------------|
+| 1.6.0 | 2026-09-09 | Upgraded to Chrome 132-134 fingerprint library, streaming request 429 automatic exponential backoff retry, support flexible environment variable `API_KEY` (string/comma-separated/JSON), added `gemini-3.7-flash` and 2.0/2.5 compatibility aliases, health check returns detailed status |
+| 1.5.0 | 2026-07-31 | Added multi-fingerprint rotation, multi-Cookie rotation, random delay mechanism |
+| 1.4.0 | 2026-07-30 | Fixed concurrent crosstalk, rate limiting memory safety |
+| 1.3.0 | 2026-07-29 | Fixed SSE streaming format, NextChat compatibility |
+| 1.0.0 | 2026-07-16 | Initial version, ported from gemini-web2api v1.1.0 |
+
+---
+
+## 📄 License
+
+This project is based on the original project [gemini-web2api](https://github.com/your-repo/gemini-web2api) ported, following the original project's open source license.

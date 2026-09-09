@@ -76,10 +76,11 @@ gemini
 
 ## 可用模型
 
-| 模型 | 说明 | 输出量 |
-|------|------|--------|
-| `gemini-3.6-flash` | 全能模型 (最新) | ~1.2万字 |
-| `gemini-3.5-flash` | gemini-3.6-flash 别名 | ~1.2万字 |
+| 模型 | 说明 | 输出长度 |
+|------|------|----------|
+| `gemini-3.7-flash` | 最新全能模型（Gemini 3.7 Flash） | ~12k 字符 |
+| `gemini-3.6-flash` | 全能模型 | ~12k 字符 |
+| `gemini-3.5-flash` | 3.6 Flash 的别名 | ~12k 字符 |
 | `gemini-3.5-flash-thinking` | 扩展思考, 最长输出 | **~2万字** |
 | `gemini-3.5-flash-thinking-lite` | 自适应思考深度 | ~1.5万字 |
 | `gemini-3.1-pro` | 高级数学与代码 (需 cookie) | ~1.2万字 |
@@ -158,7 +159,7 @@ Pro 路由需要 **Gemini Advanced** (付费订阅). 免费 Google 账号的 coo
   "retry_attempts": 3,
   "retry_delay_sec": 2,
   "request_timeout_sec": 180,
-  "gemini_bl": "boq_assistant-bard-web-server_20260716.08_p0",
+  "gemini_bl": "boq_assistant-bard-web-server_20260907.07_p0",
   "auth_user": null,
   "xsrf_token": null,
   "api_keys": ["sk-your-key"],

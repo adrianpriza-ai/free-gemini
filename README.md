@@ -87,8 +87,9 @@ Supports Google native API endpoints:
 ## Available Models
 
 | Model | Description | Output |
-|-------|-------------|--------|
-| `gemini-3.6-flash` | All-around model (latest) | ~12k chars |
+|-|-|-|
+| `gemini-3.7-flash` | Latest all-around model (Gemini 3.7 Flash) | ~12k chars |
+| `gemini-3.6-flash` | All-around model | ~12k chars |
 | `gemini-3.5-flash` | Alias for gemini-3.6-flash | ~12k chars |
 | `gemini-3.5-flash-thinking` | Extended thinking, longest output | **~20k chars** |
 | `gemini-3.5-flash-thinking-lite` | Adaptive thinking depth | ~15k chars |
@@ -168,7 +169,7 @@ Create `config.json` in the same directory:
   "retry_attempts": 3,
   "retry_delay_sec": 2,
   "request_timeout_sec": 180,
-  "gemini_bl": "boq_assistant-bard-web-server_20260716.08_p0",
+  "gemini_bl": "boq_assistant-bard-web-server_20260907.07_p0",
   "auth_user": null,
   "xsrf_token": null,
   "api_keys": ["sk-your-key"],
@@ -295,11 +296,11 @@ MIT
 
 ---
 
-## 致谢
+## Acknowledgments
 
-本项目的开发 agent 能力由 [GenericAgent](https://github.com/lsdefine/GenericAgent) 提供。
+The development agent capabilities of this project are provided by [GenericAgent](https://github.com/lsdefine/GenericAgent).
 
-### 🚩 友情链接
+### 🚩 Friendly Links
 
 [![GenericAgent](https://img.shields.io/badge/Agent_Framework-GenericAgent-orange?style=for-the-badge&logo=github)](https://github.com/lsdefine/GenericAgent)
-[![LinuxDo](https://img.shields.io/badge/社区-LinuxDo-blue?style=for-the-badge)](https://linux.do/)
+[![LinuxDo](https://img.shields.io/badge/Community-LinuxDo-blue?style=for-the-badge)](https://linux.do/)

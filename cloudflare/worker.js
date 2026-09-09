@@ -180,7 +180,7 @@ var DEFAULT_CONFIG = {
   //   3. 切换到 Network（网络）标签
   //   4. 在任意请求的 URL 中搜索 "boq_assistant"
   //   5. 复制最新版本号，如 "boq_assistant-bard-web-server_20260730.02_p0"
-  geminiBl: 'boq_assistant-bard-web-server_20260909.08_p0',
+  geminiBl: 'boq_assistant-bard-web-server_20260907.07_p0',
 
   // ---- 多账户支持 ----
   // Google 支持在同一个浏览器中登录多个账户
@@ -665,16 +665,28 @@ function getRequestConfig(env) {
     }
   }
 
-  // ---- API 密钥：JSON 数组格式，需要特殊解析 ----
-  // env.API_KEYS 是字符串类型，如 '["sk-gemini", "sk-my-key"]'
-  // 需要用 JSON.parse 解析为真正的数组
-  if (env.API_KEYS) {
-    try {
-      config.apiKeys = JSON.parse(env.API_KEYS);
-    } catch (e) {
-      // JSON 解析失败时保留默认值
-      // 输出错误日志但不中断程序运行
-      console.error('[ERROR] API_KEYS 解析失败: ' + e.message + '，使用默认值');
+  // ---- API 密钥：支持 API_KEY, API_KEYS, 或 API-KEY 环境变量 ----
+  // 支持格式：
+  // 1. 普通字符串: "my-secret-key"
+  // 2. 逗号/竖线分隔: "key1,key2" 或 "key1|key2"
+  // 3. JSON 数组: '["key1", "key2"]'
+  var rawApiKeyEnv = env.API_KEY || env.API_KEYS || env['API-KEY'] || null;
+  if (rawApiKeyEnv) {
+    if (typeof rawApiKeyEnv === 'string') {
+      var trimmed = rawApiKeyEnv.trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        try {
+          config.apiKeys = JSON.parse(trimmed);
+        } catch (e) {
+          console.error('[ERROR] API_KEYS JSON 解析失败: ' + e.message + '，尝试按分隔符解析');
+          config.apiKeys = trimmed.replace(/^\[|\]$/g, '').split(/[,|]/).map(function (k) { return k.trim().replace(/^["']|["']$/g, ''); }).filter(Boolean);
+        }
+      } else {
+        // 单个 key 或逗号/管道分隔的多个 key
+        config.apiKeys = trimmed.split(/[,|]/).map(function (k) { return k.trim(); }).filter(Boolean);
+      }
+    } else if (Array.isArray(rawApiKeyEnv)) {
+      config.apiKeys = rawApiKeyEnv;
     }
   }
 
