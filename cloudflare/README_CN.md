@@ -14,6 +14,7 @@ Gemini Web2API 是一个部署在 Cloudflare Workers 上的无服务器代理服
 - **多 Cookie 轮换**：支持配置多个 Google 账号 Cookie，随机选择使用
 - **并发安全**：请求级配置隔离，彻底消除高并发场景下的配置串扰
 - **工具调用支持**：兼容 OpenAI Function Calling 格式
+- **ProxyScrape 自动代理池**：自动拉取 ProxyScrape 免费代理（默认 <=200ms 低延迟 API 或 GitHub 完整源），支持通过 `cloudflare:sockets` 自动连通性测试（HTTP CONNECT、SOCKS5、SOCKS4），每 24 小时自动静默刷新（Cron 定时触发与请求后台更新），支持自动故障转移与直连兜底。
 
 ### 适用场景
 
@@ -79,7 +80,7 @@ https://你的worker.workers.dev/health
 ### NextChat (ChatGPT-Next-Web)
 
 | 配置项 | 值 |
-|--------|-----|
+|-|-|
 | 接口类型 | OpenAI |
 | 接口地址 | `https://你的worker.workers.dev/v1` |
 | API Key | `sk-gemini`（默认密钥） |
@@ -88,7 +89,7 @@ https://你的worker.workers.dev/health
 ### Cherry Studio
 
 | 配置项 | 值 |
-|--------|-----|
+|-|-|
 | API 地址 | `https://你的worker.workers.dev/v1` |
 | API 密钥 | `sk-gemini` |
 | 模型 | `gemini-3.6-flash` |
@@ -96,7 +97,7 @@ https://你的worker.workers.dev/health
 ### ChatBox
 
 | 配置项 | 值 |
-|--------|-----|
+|-|-|
 | API 模式 | OpenAI API |
 | API 域名 | `https://你的worker.workers.dev` |
 | API 路径 | `/v1/chat/completions` |
@@ -135,7 +136,7 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 ### 认证相关
 
 | 变量名 | 说明 | 示例值 |
-|--------|------|--------|
+|-|-|-|
 | `COOKIE_STRING` | Gemini Cookie，多个用 `\|` 分隔 | `cookie1\| cookie2\| cookie3` |
 | `SAPISID` | SAPISID 值，多个用 `\|` 分隔 | `sapisid1\| sapisid2\| sapisid3` |
 | `API_KEY` / `API_KEYS` | API 密钥，支持单个字符串、逗号/竖线分隔多密钥、或 JSON 数组 | `my-secret-key` 或 `key1, key2` 或 `["sk-gemini", "my-key"]` |
@@ -143,7 +144,7 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 ### Gemini 配置
 
 | 变量名 | 说明 | 示例值 |
-|--------|------|--------|
+|-|-|-|
 | `GEMINI_BL` | Gemini 构建标签（遇到 405 时更新） | `boq_assistant-bard-web-server_20260907.07_p0` |
 | `DEFAULT_MODEL` | 默认模型 | `gemini-3.6-flash` |
 | `AUTH_USER` | 多账户索引 | `0` |
@@ -151,7 +152,7 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 ### 性能调优
 
 | 变量名 | 说明 | 默认值 |
-|--------|------|--------|
+|-|-|-|
 | `RETRY_ATTEMPTS` | 重试次数 | `3` |
 | `RETRY_DELAY_SEC` | 重试间隔（秒） | `2` |
 | `REQUEST_TIMEOUT_SEC` | 请求超时（秒） | `28` |
@@ -159,7 +160,36 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 | `RATE_LIMIT_MAX` | 速率限制最大请求数 | `3000` |
 | `RATE_LIMIT_WINDOW` | 速率限制时间窗口（秒） | `60` |
 
+### 🌐 代理池与 24 小时更新配置
+
+| 变量名 | 说明 | 默认值 |
+|-|-|-|
+| `ENABLE_PROXY` | 是否启用代理轮换 | `true` |
+| `PROXY_SOURCE_URL` | 主代理源 URL（ProxyScrape 200ms API） | `https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text&timeout=200` |
+| `PROXY_FALLBACK_SOURCE_URL` | 备用代理源 URL（GitHub 完整源） | `https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt` |
+| `STATIC_PROXIES` / `PROXY_URL` | 自定义固定代理（逗号或换行分隔，如 `http://user:pass@ip:port`, `socks5://ip:port`） | 空 |
+| `AUTO_TEST_PROXY` | 加入代理池前自动进行连通性测试 | `true` |
+| `PROXY_TEST_TIMEOUT_MS` | 单个代理测试握手超时时间（毫秒） | `2000` |
+| `PROXY_UPDATE_INTERVAL_HOURS` | 代理池自动更新周期（小时） | `24` |
+| `PROXY_MAX_POOL_SIZE` | 代理池保留的最大可用代理数 | `30` |
+| `PROXY_FALLBACK_DIRECT` | 代理全部失效时是否自动降级回退到直连 | `true` |
+| `PROXY_ROTATION_MODE` | 代理选择算法（`round-robin` 轮询 或 `random` 随机） | `round-robin` |
+
+#### 24 小时更新运行原理：
+1. **Cloudflare Cron 定时任务（推荐）**：
+   - 使用 Wrangler 部署时，`wrangler.jsonc` 已自动配置 `"triggers": { "crons": ["0 0 * * *"] }`。
+   - 在 Cloudflare 控制台：进入 **Workers & Pages** → 你的 Worker → **Triggers**（触发器） → **Cron Triggers** → **Add Cron Trigger** → 填写 `0 0 * * *`（每天 UTC 00:00 自动触发）。
+2. **按需后台更新**：
+   - 即使未在控制台配置 Cron 定时器，Worker 在收到请求时也会比对时间戳。若距离上次更新已超过 24 小时，会自动使用 `ctx.waitUntil()` 在后台静默刷新代理池，完全不阻塞当前客户端请求！
+3. **Cloudflare KV 持久化（可选）**：
+   - 为 Worker 绑定名为 `PROXY_KV` 的 KV 命名空间，测速通过的代理池将持久化保存，并在全球各边缘节点间共享，降低冷启动开销。
+4. **管理端点**：
+   - `GET /proxies`：查看当前代理池状态、存活代理列表、各节点延迟及下次更新时间。
+   - `POST /proxies/refresh` 或 `GET /proxies/refresh`：强制立即重新拉取并测试代理池。
+   - `GET /health`：健康检查响应中已包含代理运行状态。
+
 ---
+
 
 ## 🍪 获取 Gemini Cookie
 
@@ -219,7 +249,7 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 本程序内置了浏览器指纹轮换系统，每次请求会随机选择不同的浏览器标识：
 
 | 指纹类型 | 池大小 | 说明 |
-|---------|--------|------|
+|-|-|-|
 | User-Agent | 8 种 | 加权随机，模拟真实浏览器市场份额 |
 | Accept-Language | 6 种 | 均匀随机，模拟不同地区用户 |
 | Sec-Ch-Ua | 3 种 | Chrome 版本标识（仅 Chrome UA 时添加） |
@@ -268,7 +298,7 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 ## 📊 支持模型列表
 
 | 模型 ID | 类型 | 说明 |
-|---------|------|------|
+|-|-|-|
 | `gemini-3.7-flash` | FAST | 最新全能模型（Gemini 3.7 Flash） |
 | `gemini-3.6-flash` | FAST | 全能模型（Gemini 3.6 Flash） |
 | `gemini-3.5-flash` | FAST | 3.6 Flash 的别名 |
@@ -290,7 +320,8 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 ## 📝 更新日志
 
 | 版本 | 日期 | 更新内容 |
-|------|------|---------|
+|-|-|-|
+| 1.7.0 | 2026-09-10 | 新增 ProxyScrape 免费代理池自动抓取（默认 <=200ms API 与 GitHub 完整源）、基于 cloudflare:sockets 的代理连通性真实测试系统（HTTP CONNECT、SOCKS5、SOCKS4）、24 小时定时更新与 Cron 触发器支持（`0 0 * * *`）、故障自动轮换与直连降级兜底、新增 `/proxies` 与 `/proxies/refresh` 管理端点 |
 | 1.6.0 | 2026-09-09 | 升级至 Chrome 132-134 指纹库、流式请求 429 自动指数退避重试、支持灵活的环境变量 `API_KEY`（字符串/逗号分隔/JSON）、新增 `gemini-3.7-flash` 及 2.0/2.5 兼容别名、健康检查返回详细状态 |
 | 1.5.0 | 2026-07-31 | 新增多指纹轮换、多Cookie轮换、随机延迟机制 |
 | 1.4.0 | 2026-07-30 | 修复并发串扰、速率限制内存安全 |
@@ -301,4 +332,4 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 
 ## 📄 许可证
 
-本项目基于原项目 [gemini-web2api](https://github.com/your-repo/gemini-web2api) 移植，遵循原项目的开源协议。
+本项目基于原项目 [gemini-web2api](https://github.com/Sophomoresty/gemini-web2api) 移植，遵循原项目的开源协议。

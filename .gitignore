@@ -1,9 +1,56 @@
-__pycache__/
-*.pyc
+# Python
+
+**pycache**/
+*.py[cod]
+*$py.class
+*.so
+
+# Python virtual environments
+
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets / credentials
+
+.env
+.env.*
+!.env.example
 config.json
 cookie.txt
 cookie.json
-.env
-.idea
-.DS_Store
 gemini-auth.json
+
+# Cloudflare
+
+.wrangler/
+.dev.vars
+.dev.vars.*
+wrangler.toml.local
+
+# Build output
+
+dist/
+build/
+
+# Logs
+
+*.log
+
+# IDE / editors
+
+.idea/
+.vscode/
+
+# OS
+
+.DS_Store
+Thumbs.db
+
+# Temporary / cache
+
+.cache/
+*.tmp
+*.temp
+

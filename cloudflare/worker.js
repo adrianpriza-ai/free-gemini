@@ -1,161 +1,13 @@
-/**
- * Gemini Web2API - Cloudflare Workers 完整并发安全修复版
- * 多指纹轮换 + 多Cookie轮换 + 打字机效果 + 随机延迟
- * 
- * ============================================================================
- * 项目说明
- * ============================================================================
- * 本程序将 Google Gemini 的 Web 界面转换为 OpenAI 兼容的 API 接口。
- * 部署于 Cloudflare Workers 边缘计算平台，无需服务器即可运行。
- * 支持流式输出（SSE 打字机效果）、非流式输出、工具调用（Function Calling）。
- * 
- * ============================================================================
- * 核心功能列表:
- * ============================================================================
- * 
- * 1. 【并发安全】彻底消除了全局 CONFIG 被异步请求并发篡改/串扰的严重隐患。
- *    根本原因：CF Workers 的 Isolate 在热启动（复用）时，全局作用域代码不会重新执行。
- *    当 WorkBuddy 等客户端在极短时间内发送多个并发请求时，
- *    它们会共享同一个全局 CONFIG 对象（因为复用同一个 Isolate）。
- *    请求 A 修改了 CONFIG.cookieString = "cookie_a"，
- *    请求 B 紧接着修改了 CONFIG.cookieString = "cookie_b"，
- *    请求 A 后续使用的却是 cookie_b，导致认证信息串扰。
- *    这在 WorkBuddy 的多模型并发调用场景下尤为严重。
- *    
- *    解决方案：
- *    每次请求通过 getRequestConfig(env) 创建全新的独立配置副本，
- *    所有函数通过参数接收配置对象，完全不依赖全局可变状态。
- * 
- * 2. 【请求级配置隔离】实现了基于每次请求独立创建配置副本的机制。
- *    - DEFAULT_CONFIG 作为只读模板，永远不会被修改
- *    - getRequestConfig(env) 为每个请求创建独立的配置副本
- *    - 从 env（环境变量，每个请求由 CF 平台独立注入）加载定制配置
- *    - 所有函数签名都包含 config 参数，完全消除全局状态依赖
- *    - 使用显式赋值（env.X || null）防止 Isolate 复用时的值残留
- * 
- * 3. 【速率限制内存安全】修复全局 rateLimitStore 在 Serverless 环境下的隐式内存泄露问题。
- *    - Serverless 环境下 Isolate 可能长时间存活（热启动复用）
- *    - 如果不清理过期记录，Map 会无限增长导致内存泄漏
- *    - 使用随机概率清理机制（5% 概率触发全局清理）
- *    - 每次清理遍历所有键，删除过期或空的记录
- *    - 确保长期运行后内存使用保持稳定
- * 
- * 4. 【SAPISID 自动提取】增加了从 COOKIE_STRING 自动提取 SAPISID 的防御性逻辑。
- *    - 用户通常从浏览器复制完整 Cookie 字符串
- *    - Cookie 格式: "__Secure-1PSID=xxx; SAPISID=yyy; ..."
- *    - 如果用户设置了 COOKIE_STRING 但忘记单独设置 SAPISID
- *    - 程序会自动从 Cookie 字符串中正则提取 SAPISID 值
- *    - 正则表达式: /SAPISID=([^;]+)/
- *    - 提升用户体验，减少配置错误
- * 
- * 5. 【多指纹轮换】新增浏览器指纹轮换机制，降低被 Gemini 识别的概率。
- *    - User-Agent 轮换池（8 种真实浏览器 UA，涵盖 Windows/macOS/Linux）
- *    - Accept-Language 轮换池（6 种语言偏好设置）
- *    - Sec-Ch-Ua 轮换池（3 种 Chrome 版本标识）
- *    - Sec-Ch-Ua-Platform 轮换池（3 种操作系统平台）
- *    - 加权随机选择，模拟真实浏览器市场份额分布
- *    - Chrome ~72%（含 Windows/macOS/Linux）、Firefox ~8%、Safari ~8%
- * 
- * 6. 【多 Cookie 轮换】支持配置多个 Google 账号的 Cookie，随机选择使用。
- *    - 环境变量使用 | 分隔多个 Cookie: "cookie1| cookie2| cookie3"
- *    - 环境变量使用 | 分隔多个 SAPISID: "sapisid1| sapisid2| sapisid3"
- *    - 每次请求随机选择一个 Cookie 和对应的 SAPISID
- *    - 如果 SAPISID 数量与 Cookie 数量匹配，使用对应索引的 SAPISID
- *    - 大幅降低单个 Google 账号被限流（429）的概率
- * 
- * 7. 【随机延迟】请求前添加随机微小延迟，模拟人类操作间隔。
- *    - 延迟时间在 0 到 fingerprintJitterMs 之间随机（默认 1500ms）
- *    - 重试时也会添加新的随机延迟
- *    - 可配置：设置环境变量 FINGERPRINT_JITTER_MS=0 可禁用
- *    - 配合指纹轮换使用效果更佳
- * 
- * 8. 【SSE 打字机效果】OPTIONS 预检优先处理、实时增量输出、心跳保活。
- *    SSE 格式严格符合 OpenAI 标准：
- *    - 首块: delta: { role: 'assistant' }（只含 role，不含 content）
- *    - 内容块: delta: { content: '增量文本' }（实时计算并推送增量）
- *    - 结束块: delta: { content: "" }, finish_reason: 'stop'
- *    - 心跳保活：每 2 秒发送 ": heartbeat\n\n" SSE 注释
- * 
- * 9. 【完整功能保留】工具调用（Function Calling）、速率限制、API认证、
- *    Google原生API（Gemini CLI兼容）、Responses API（Codex CLI兼容）。
- * 
- * ============================================================================
- * 部署说明:
- * ============================================================================
- * 1. 登录 Cloudflare Dashboard -> Workers & Pages
- * 2. 创建 Worker -> 粘贴此代码 -> 保存并部署
- * 3. 配置环境变量(可选):
- * 
- *    【认证相关】
- *    - COOKIE_STRING: Cookie 字符串，多个用 | 分隔
- *      格式: "cookie_account1| cookie_account2| cookie_account3"
- *      从浏览器 F12 -> Application -> Cookies 中复制完整 Cookie
- *      包含 __Secure-1PSID、__Secure-3PSID、SAPISID 等
- *    - SAPISID: SAPISID 值，多个用 | 分隔
- *      格式: "sapisid_1| sapisid_2| sapisid_3"
- *      如果未设置，会自动从 COOKIE_STRING 中提取
- * 
- *    【API 安全】
- *    - API_KEYS: API 密钥 JSON 数组，如 ["sk-gemini", "sk-my-key"]
- *      留空或设为 [] 表示不验证密钥
- * 
- *    【Gemini 配置】
- *    - GEMINI_BL: Gemini 构建标签
- *      遇到 405 错误时需要更新此值
- *      获取方法：浏览器打开 gemini.google.com -> F12 -> Network -> 搜索 "boq_assistant"
- *    - DEFAULT_MODEL: 默认模型名称，如 "gemini-3.6-flash"
- *    - AUTH_USER: 多账户索引，0=第一个账户，1=第二个账户
- * 
- *    【性能调优】
- *    - RETRY_ATTEMPTS: 重试次数，默认 3
- *    - RETRY_DELAY_SEC: 重试间隔(秒)，默认 2
- *    - REQUEST_TIMEOUT_SEC: 请求超时(秒)，默认 28
- *    - FINGERPRINT_JITTER_MS: 请求前随机延迟最大值(毫秒)，默认 1500
- *      设为 0 可禁用随机延迟
- *    - RATE_LIMIT_MAX: 速率限制最大请求数，默认 3000
- *    - RATE_LIMIT_WINDOW: 速率限制时间窗口(秒)，默认 60
- * 
- * 客户端配置:
- *   基础URL: https://你的worker.workers.dev/v1
- *   API密钥: sk-gemini (或你在配置中设置的密钥)
- *   模型: gemini-3.6-flash
- * 
- * ============================================================================
- * 技术架构说明:
- * ============================================================================
- * 
- * 【Isolate 模型】
- * Cloudflare Workers 使用 Isolate（隔离环境）处理每个请求：
- * - 冷启动：全局代码重新执行，所有变量重新初始化
- * - 热启动：复用已有 Isolate，全局代码不执行，变量保留上次状态
- * - env 参数：每个请求由 CF 平台独立注入，始终包含最新环境变量
- * 
- * 【配置隔离原理】
- * 1. DEFAULT_CONFIG 作为不可变模板（只读）
- * 2. getRequestConfig(env) 每次创建全新副本
- * 3. 从 env 读取配置，用 || null 显式覆盖所有字段
- * 4. 所有函数通过 config 参数接收配置
- * 5. 不存在任何全局可变状态的依赖
- * 
- * 【为什么需要显式覆盖？】
- * 如果使用 if (env.X) CONFIG.X = env.X 的模式：
- * - 当 env.X 存在时，CONFIG.X 被更新 ✓
- * - 当 env.X 不存在时，if 不执行，CONFIG.X 保留上次值 ✗
- * 使用 CONFIG.X = env.X || null 确保始终显式赋值。
- * 
- * 基于原项目 gemini-web2api v1.1.0 移植
- * 原作者项目: https://github.com/your-repo/gemini-web2api
- */
+import { connect } from 'cloudflare:sockets';
 
-// ============================================================================
 // 🔒 默认配置 - 仅作为只读模板
-// ============================================================================
+//
 // 这是所有请求配置的"蓝图"（Blueprint），用于生成每个请求的独立配置副本。
 // 这个对象永远不会被修改，所有修改都在请求级的 config 副本中进行。
 // 使用 Object.freeze() 确保不可变性，防止意外修改导致全局影响。
 
 var DEFAULT_CONFIG = {
-  // ---- 重试配置 ----
+  // -- 重试配置
   // 当请求失败时，自动重试的次数
   // 每次重试使用指数退避策略：延迟时间 = retryDelaySec * 2^attempt
   // 例如：第一次重试延迟 2 秒，第二次 4 秒，第三次 8 秒
@@ -164,14 +16,14 @@ var DEFAULT_CONFIG = {
   // 实际延迟 = retryDelaySec * 2^attempt（指数退避）
   retryDelaySec: 2,
 
-  // ---- 请求超时 ----
+  // -- 请求超时
   // 单次 HTTP 请求的超时时间（秒）
   // 注意：CF Workers 免费版有 30 秒 CPU 时间限制
   // 流式请求的 CPU 时间在数据到达时重置，所以不受此严格限制
   // 但初始连接和第一个数据块必须在超时内到达
   requestTimeoutSec: 28,
 
-  // ---- Gemini 构建标签 ----
+  // -- Gemini 构建标签
   // Gemini 前端的版本标识，用于 API 请求的 URL 参数
   // 如果遇到 405 Method Not Allowed 错误，说明此值已过期
   // 更新方法：
@@ -182,25 +34,25 @@ var DEFAULT_CONFIG = {
   //   5. 复制最新版本号，如 "boq_assistant-bard-web-server_20260730.02_p0"
   geminiBl: 'boq_assistant-bard-web-server_20260907.07_p0',
 
-  // ---- 多账户支持 ----
+  // -- 多账户支持
   // Google 支持在同一个浏览器中登录多个账户
   // null 或 "" 表示使用默认账户（第一个登录的账户）
   // "0" 表示第一个账户，"1" 表示第二个账户，以此类推
   // 使用非默认账户时，Gemini URL 会包含 /u/1 等前缀
   authUser: null,
 
-  // ---- XSRF 令牌 ----
+  // -- XSRF 令牌
   // 跨站请求伪造保护令牌
   // Gemini Web 前端会使用此令牌，但 API 调用通常不需要
   // 如果遇到 403 错误，可以尝试从浏览器中提取此值
   xsrfToken: null,
 
-  // ---- 默认模型 ----
+  // -- 默认模型
   // 当客户端请求未指定 model 参数时使用的默认模型
   // 可选值参考 MODELS 字典的键名
   defaultModel: 'gemini-3.6-flash',
 
-  // ---- API 密钥白名单 ----
+  // -- API 密钥白名单
   // 用于验证客户端请求的密钥列表
   // 空数组 [] 表示不验证，所有请求都可以访问（不推荐用于生产）
   // 设置后，客户端必须在请求头中提供有效的密钥
@@ -208,7 +60,7 @@ var DEFAULT_CONFIG = {
   // 示例: ["sk-gemini", "sk-my-custom-key"]
   apiKeys: ['sk-gemini'],
 
-  // ---- Cookie 认证 ----
+  // -- Cookie 认证
   // Gemini 对匿名请求有严格的速率限制（容易触发 429 Too Many Requests）
   // 提供有效的 Cookie 可以大幅提升稳定性和降低限流概率
   // cookieString: 从浏览器复制的完整 Cookie 字符串
@@ -224,13 +76,13 @@ var DEFAULT_CONFIG = {
   //   示例: "sapisid1| sapisid2| sapisid3"
   sapisid: null,
 
-  // ---- 日志开关 ----
+  // -- 日志开关
   // 是否在控制台输出请求日志
   // 生产环境建议保持开启，便于排查问题
   // 日志格式: [HH:MM:SS] [LEVEL] message
   logRequests: true,
 
-  // ---- 速率限制 ----
+  // -- 速率限制
   // Cloudflare Workers 级别的请求频率控制
   // 用于防止滥用和保护上游 Gemini API
   rateLimit: {
@@ -245,17 +97,40 @@ var DEFAULT_CONFIG = {
     windowSec: 60,
   },
 
-  // ---- 指纹轮换配置 ----
+  // -- 指纹轮换配置
   // 请求前随机延迟的最大值（毫秒）
   // 模拟人类操作间隔，降低被检测为自动化请求的概率
   // 默认 1500ms（1.5秒），设为 0 可禁用
   // 配合 User-Agent 轮换使用效果更佳
   fingerprintJitterMs: 1500,
+
+  // -- 代理池自动获取与测试配置
+  proxy: {
+    // 是否启用代理池（默认开启）
+    enabled: true,
+    // 代理源 URL（默认使用 ProxyScrape 200ms timeout API，体积小、速度快、质量高）
+    sourceUrl: 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text&timeout=200',
+    // 备用源（GitHub raw 完整源）
+    fallbackSourceUrl: 'https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt',
+    // 用户自定义固定代理列表（支持 http/socks5，以逗号、竖线或换行分隔）
+    staticProxies: [],
+    // 自动测试代理开关（通过 cloudflare:sockets 握手验证可用性）
+    autoTest: true,
+    // 单个代理连接与握手测试超时（毫秒）
+    testTimeoutMs: 2000,
+    // 代理池最大保留数量（避免占用过多 Worker 内存）
+    maxPoolSize: 30,
+    // 代理池更新间隔时间（小时，默认 24 小时）
+    updateIntervalHours: 24,
+    // 当所有代理不可用时是否自动降级回退到直连（确保业务高可用）
+    fallbackDirect: true,
+    // 代理轮询方式：'round-robin'（轮询）或 'random'（随机）
+    rotationMode: 'round-robin',
+  },
 };
 
-// ============================================================================
 // 🎭 多指纹轮换池
-// ============================================================================
+//
 // 以下指纹池用于每次请求时随机选择不同的浏览器标识。
 // 目的是让每次请求看起来来自不同的浏览器和设备，
 // 降低被 Gemini 服务器识别为自动化脚本的概率。
@@ -424,9 +299,8 @@ function getRandomSecChUaPlatform() {
   return SEC_CH_UA_PLATFORMS[idx];
 }
 
-// ============================================================================
 // 🤖 模型定义
-// ============================================================================
+//
 // 映射自 Gemini Web 前端 JS 源码中的 MODE_CATEGORY 枚举
 // 
 // mode 字段含义（MODE_CATEGORY 枚举值）：
@@ -482,7 +356,7 @@ var MODELS = {
     think: 4,       // AUTO
     desc: 'Lightweight fast model',
   },
-  // ---- Popular aliases for broad client compatibility ----
+  // -- Popular aliases for broad client compatibility
   'gemini-2.5-flash': {
     mode: 1,
     think: 4,
@@ -510,9 +384,7 @@ var MODELS = {
   },
 };
 
-// ============================================================================
 // 🔑 核心：请求级配置生成器（解决并发串扰 + 多Cookie轮换 + 指纹轮换）
-// ============================================================================
 
 /**
  * 为当前请求创建独立的配置副本
@@ -547,14 +419,15 @@ var MODELS = {
  * SAPISID = "sapisid_1| sapisid_2| sapisid_3"
  * 
  * @param {Object} env - Cloudflare Worker 环境变量（每个请求独立）
+ * @param {Object} ctx - Cloudflare Worker 执行上下文（包含 waitUntil 等）
  * @returns {Object} 专属于当前请求的配置副本
  */
-function getRequestConfig(env) {
+function getRequestConfig(env, ctx) {
   // 从默认模板创建全新的配置对象
   // 逐字段手动拷贝，确保每个字段都是独立的基本类型副本
   // 不使用展开运算符 (...DEFAULT_CONFIG)，避免引用共享问题
   var config = {
-    // ---- 基本配置字段 ----
+    // -- 基本配置字段
     retryAttempts: DEFAULT_CONFIG.retryAttempts,
     retryDelaySec: DEFAULT_CONFIG.retryDelaySec,
     requestTimeoutSec: DEFAULT_CONFIG.requestTimeoutSec,
@@ -568,7 +441,7 @@ function getRequestConfig(env) {
     logRequests: DEFAULT_CONFIG.logRequests,
     fingerprintJitterMs: DEFAULT_CONFIG.fingerprintJitterMs,
 
-    // ---- 嵌套对象：rateLimit 需要深拷贝 ----
+    // -- 嵌套对象：rateLimit 需要深拷贝
     // 因为 rateLimit 是一个对象，不能直接赋值（会引用共享）
     // 需要创建一个新对象，逐字段拷贝
     rateLimit: {
@@ -576,15 +449,27 @@ function getRequestConfig(env) {
       maxRequests: DEFAULT_CONFIG.rateLimit.maxRequests,
       windowSec: DEFAULT_CONFIG.rateLimit.windowSec,
     },
+
+    // -- 嵌套对象：proxy 需要深拷贝
+    proxy: {
+      enabled: DEFAULT_CONFIG.proxy.enabled,
+      sourceUrl: DEFAULT_CONFIG.proxy.sourceUrl,
+      fallbackSourceUrl: DEFAULT_CONFIG.proxy.fallbackSourceUrl,
+      staticProxies: DEFAULT_CONFIG.proxy.staticProxies.slice(),
+      autoTest: DEFAULT_CONFIG.proxy.autoTest,
+      testTimeoutMs: DEFAULT_CONFIG.proxy.testTimeoutMs,
+      maxPoolSize: DEFAULT_CONFIG.proxy.maxPoolSize,
+      updateIntervalHours: DEFAULT_CONFIG.proxy.updateIntervalHours,
+      fallbackDirect: DEFAULT_CONFIG.proxy.fallbackDirect,
+      rotationMode: DEFAULT_CONFIG.proxy.rotationMode,
+    },
   };
 
-  // ================================================================
   // 环境变量覆盖
   // env 是 Cloudflare 为每个请求独立提供的环境变量对象
   // 这些值是在 CF Dashboard 中配置的，修改后自动生效
-  // ================================================================
 
-  // ---- 字符串类型：有值才覆盖（保留默认值作为兜底） ----
+  // -- 字符串类型：有值才覆盖（保留默认值作为兜底）
   if (env.GEMINI_BL) {
     config.geminiBl = env.GEMINI_BL;
   }
@@ -592,16 +477,15 @@ function getRequestConfig(env) {
     config.defaultModel = env.DEFAULT_MODEL;
   }
 
-  // ---- 认证相关字段：使用 || 操作符确保显式覆盖 ----
+  // -- 认证相关字段：使用 || 操作符确保显式覆盖
   // 这些字段可能为 null 或空字符串
   // 使用 || null 确保即使 env 值为 undefined 或空字符串，
   // 也会显式设置为 null，防止 Isolate 复用时上次请求的值残留
   config.authUser = env.AUTH_USER || null;
   config.xsrfToken = env.XSRF_TOKEN || null;
 
-  // ================================================================
   // 🎭 多 Cookie 轮换支持
-  // ================================================================
+  //
   // 将环境变量中的字符串按 | 分割成数组
   // 过滤掉空字符串（处理连续 | 或首尾 | 的情况）
   // 
@@ -644,9 +528,8 @@ function getRequestConfig(env) {
   // 情况 3：既没有 Cookie 也没有 SAPISID
   // config.cookieString 和 config.sapisid 保持默认值 null
 
-  // ================================================================
   // 🛡️ 智能兼容：自动从 COOKIE_STRING 提取 SAPISID
-  // ================================================================
+  //
   // 如果最终 SAPISID 为空但 Cookie 不为空，
   // 尝试从 Cookie 字符串中正则匹配提取 SAPISID 值
   // 
@@ -665,7 +548,7 @@ function getRequestConfig(env) {
     }
   }
 
-  // ---- API 密钥：支持 API_KEY, API_KEYS, 或 API-KEY 环境变量 ----
+  // -- API 密钥：支持 API_KEY, API_KEYS, 或 API-KEY 环境变量
   // 支持格式：
   // 1. 普通字符串: "my-secret-key"
   // 2. 逗号/竖线分隔: "key1,key2" 或 "key1|key2"
@@ -690,7 +573,7 @@ function getRequestConfig(env) {
     }
   }
 
-  // ---- 数字类型字段：需要 parseInt 转换 ----
+  // -- 数字类型字段：需要 parseInt 转换
   // env 中的环境变量都是字符串类型
   // 需要用 parseInt(value, 10) 转换为十进制整数
   // 使用 isNaN() 检查转换结果，防止无效值
@@ -712,7 +595,7 @@ function getRequestConfig(env) {
     if (!isNaN(fj)) config.fingerprintJitterMs = fj;
   }
 
-  // ---- 速率限制配置 ----
+  // -- 速率限制配置
   if (env.RATE_LIMIT_MAX) {
     var rlmax = parseInt(env.RATE_LIMIT_MAX, 10);
     if (!isNaN(rlmax)) config.rateLimit.maxRequests = rlmax;
@@ -721,15 +604,54 @@ function getRequestConfig(env) {
     var rlwin = parseInt(env.RATE_LIMIT_WINDOW, 10);
     if (!isNaN(rlwin)) config.rateLimit.windowSec = rlwin;
   }
+  // -- 代理池配置环境变量解析
+  if (env.ENABLE_PROXY !== undefined) {
+    config.proxy.enabled = String(env.ENABLE_PROXY).toLowerCase() === 'true' || env.ENABLE_PROXY === '1';
+  } else if (env.PROXY_ENABLED !== undefined) {
+    config.proxy.enabled = String(env.PROXY_ENABLED).toLowerCase() === 'true' || env.PROXY_ENABLED === '1';
+  }
+  if (env.PROXY_SOURCE_URL) {
+    config.proxy.sourceUrl = env.PROXY_SOURCE_URL.trim();
+  }
+  if (env.PROXY_FALLBACK_SOURCE_URL) {
+    config.proxy.fallbackSourceUrl = env.PROXY_FALLBACK_SOURCE_URL.trim();
+  }
+  if (env.STATIC_PROXIES || env.PROXY_URL || env.PROXIES) {
+    var rawStatic = (env.STATIC_PROXIES || env.PROXY_URL || env.PROXIES || '').trim();
+    config.proxy.staticProxies = rawStatic.split(/[\n,;|]/).map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+  if (env.AUTO_TEST_PROXY !== undefined) {
+    config.proxy.autoTest = String(env.AUTO_TEST_PROXY).toLowerCase() === 'true' || env.AUTO_TEST_PROXY === '1';
+  }
+  if (env.PROXY_TEST_TIMEOUT_MS) {
+    var pttm = parseInt(env.PROXY_TEST_TIMEOUT_MS, 10);
+    if (!isNaN(pttm) && pttm > 0) config.proxy.testTimeoutMs = pttm;
+  }
+  if (env.PROXY_MAX_POOL_SIZE) {
+    var pmps = parseInt(env.PROXY_MAX_POOL_SIZE, 10);
+    if (!isNaN(pmps) && pmps > 0) config.proxy.maxPoolSize = pmps;
+  }
+  if (env.PROXY_UPDATE_INTERVAL_HOURS) {
+    var puih = parseInt(env.PROXY_UPDATE_INTERVAL_HOURS, 10);
+    if (!isNaN(puih) && puih > 0) config.proxy.updateIntervalHours = puih;
+  }
+  if (env.PROXY_FALLBACK_DIRECT !== undefined) {
+    config.proxy.fallbackDirect = String(env.PROXY_FALLBACK_DIRECT).toLowerCase() === 'true' || env.PROXY_FALLBACK_DIRECT === '1';
+  }
+  if (env.PROXY_ROTATION_MODE) {
+    config.proxy.rotationMode = env.PROXY_ROTATION_MODE.trim().toLowerCase();
+  }
+
+  // 附加环境与上下文引用，便于异步任务与 KV 访问
+  config._env = env;
+  config._ctx = ctx;
 
   // 返回请求专属的配置副本
   // 这个对象在请求结束后随 Isolate 回收
   return config;
 }
 
-// ============================================================================
 // 🛠 工具函数
-// ============================================================================
 
 /**
  * 日志记录函数
@@ -898,9 +820,8 @@ function getAccountPrefix(config) {
   return '/u/' + authUser;
 }
 
-// ============================================================================
 // 📡 Gemini API 请求构建
-// ============================================================================
+//
 // Gemini 的内部 API 使用复杂的嵌套数组结构。
 // 以下函数负责构建与 Gemini Web 前端完全一致的请求负载和请求头。
 // 这是整个程序能够正常工作的基础。
@@ -1136,12 +1057,928 @@ async function buildHeaders(config) {
     headers['Authorization'] = await makeSapisidHash(config.sapisid);
   }
 
+
   return headers;
 }
 
-// ============================================================================
+// 🌐 代理池系统 (ProxyScrape 自动获取 + 连通性测试 + 24小时自动更新)
+
+/**
+ * 全局代理状态管理器（在 Isolate 存活期间常驻）
+ */
+var globalProxyState = {
+  proxies: [],            // 已验证可用代理列表 [{ raw, protocol, host, port, auth, latency, fails }]
+  lastUpdated: 0,         // 上次更新时间戳 (ms)
+  isUpdating: false,      // 防并发刷新互斥锁
+  currentIndex: 0,        // 轮询计数器
+};
+
+/**
+ * 解析代理字符串
+ * 支持格式:
+ * - http://ip:port 或 https://ip:port
+ * - socks5://ip:port 或 socks4://ip:port
+ * - 带认证: http://user:pass@ip:port
+ * - 纯 ip:port（默认解析为 http）
+ * 
+ * @param {string} proxyStr - 原始代理字符串
+ * @returns {Object|null} 解析后的代理对象
+ */
+function parseProxy(proxyStr) {
+  if (!proxyStr) return null;
+  var str = String(proxyStr).trim();
+  if (!str) return null;
+
+  var protocol = 'http';
+  if (str.indexOf('socks5://') === 0) {
+    protocol = 'socks5';
+    str = str.substring(9);
+  } else if (str.indexOf('socks4://') === 0) {
+    protocol = 'socks4';
+    str = str.substring(9);
+  } else if (str.indexOf('http://') === 0) {
+    protocol = 'http';
+    str = str.substring(7);
+  } else if (str.indexOf('https://') === 0) {
+    protocol = 'https';
+    str = str.substring(8);
+  }
+
+  var auth = null;
+  var atIdx = str.indexOf('@');
+  if (atIdx !== -1) {
+    auth = str.substring(0, atIdx);
+    str = str.substring(atIdx + 1);
+  }
+
+  // 移除尾部斜杠或路径
+  var slashIdx = str.indexOf('/');
+  if (slashIdx !== -1) {
+    str = str.substring(0, slashIdx);
+  }
+
+  var colonIdx = str.lastIndexOf(':');
+  if (colonIdx === -1) return null;
+
+  var host = str.substring(0, colonIdx).trim();
+  var port = parseInt(str.substring(colonIdx + 1).trim(), 10);
+  if (!host || isNaN(port) || port <= 0 || port > 65535) return null;
+
+  return {
+    raw: proxyStr.trim(),
+    protocol: protocol,
+    host: host,
+    port: port,
+    auth: auth,
+  };
+}
+
+/**
+ * 缓冲区流读取器，用于解析底层 TCP Socket 字节流
+ * 解决数据包分片与拆包粘包问题
+ * 
+ * @param {ReadableStreamDefaultReader} reader - 底层 reader
+ */
+function BufferedStreamReader(reader) {
+  this.reader = reader;
+  this.buffer = new Uint8Array(0);
+}
+
+BufferedStreamReader.prototype.readBytes = async function (n) {
+  while (this.buffer.length < n) {
+    var res = await this.reader.read();
+    if (res.done) throw new Error('流已意外终止，未读满 ' + n + ' 字节');
+    var next = new Uint8Array(this.buffer.length + res.value.length);
+    next.set(this.buffer);
+    next.set(res.value, this.buffer.length);
+    this.buffer = next;
+  }
+  var result = this.buffer.subarray(0, n);
+  this.buffer = this.buffer.subarray(n);
+  return result;
+};
+
+BufferedStreamReader.prototype.readUntil = async function (delimiter) {
+  var delimBytes = typeof delimiter === 'string' ? new TextEncoder().encode(delimiter) : delimiter;
+  while (true) {
+    var idx = this.indexOf(delimBytes);
+    if (idx !== -1) {
+      var found = this.buffer.subarray(0, idx + delimBytes.length);
+      this.buffer = this.buffer.subarray(idx + delimBytes.length);
+      return found;
+    }
+    var res = await this.reader.read();
+    if (res.done) throw new Error('流已关闭，未匹配到分隔符');
+    var next = new Uint8Array(this.buffer.length + res.value.length);
+    next.set(this.buffer);
+    next.set(res.value, this.buffer.length);
+    this.buffer = next;
+  }
+};
+
+BufferedStreamReader.prototype.indexOf = function (needle) {
+  if (needle.length === 0 || this.buffer.length < needle.length) return -1;
+  for (var i = 0; i <= this.buffer.length - needle.length; i++) {
+    var match = true;
+    for (var j = 0; j < needle.length; j++) {
+      if (this.buffer[i + j] !== needle[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return i;
+  }
+  return -1;
+};
+
+BufferedStreamReader.prototype.getRemainingBuffer = function () {
+  return this.buffer;
+};
+
+/**
+ * 建立 HTTP CONNECT 隧道 (代理协议)
+ */
+async function establishHttpConnectTunnel(socket, targetHost, targetPort, auth) {
+  var writer = socket.writable.getWriter();
+  var reader = socket.readable.getReader();
+  var bufReader = new BufferedStreamReader(reader);
+
+  var connectReq = 'CONNECT ' + targetHost + ':' + targetPort + ' HTTP/1.1\r\n' +
+    'Host: ' + targetHost + ':' + targetPort + '\r\n' +
+    'Proxy-Connection: Keep-Alive\r\n';
+  if (auth) {
+    connectReq += 'Proxy-Authorization: Basic ' + btoa(auth) + '\r\n';
+  }
+  connectReq += '\r\n';
+
+  await writer.write(new TextEncoder().encode(connectReq));
+
+  var headerBytes = await bufReader.readUntil('\r\n\r\n');
+  var headerStr = new TextDecoder().decode(headerBytes);
+  var statusLine = headerStr.split('\r\n')[0] || '';
+  var statusMatch = statusLine.match(/HTTP\/\d(?:\.\d)?\s+(\d+)/i);
+  if (!statusMatch || statusMatch[1] !== '200') {
+    writer.releaseLock();
+    reader.releaseLock();
+    throw new Error('HTTP CONNECT 握手失败: ' + statusLine);
+  }
+
+  var remaining = bufReader.getRemainingBuffer();
+  writer.releaseLock();
+  reader.releaseLock();
+  return { remaining: remaining };
+}
+
+/**
+ * 建立 SOCKS5 隧道
+ */
+async function establishSocks5Tunnel(socket, targetHost, targetPort, auth) {
+  var writer = socket.writable.getWriter();
+  var reader = socket.readable.getReader();
+  var bufReader = new BufferedStreamReader(reader);
+
+  var user = '';
+  var pass = '';
+  if (auth) {
+    var colon = auth.indexOf(':');
+    if (colon !== -1) {
+      user = auth.substring(0, colon);
+      pass = auth.substring(colon + 1);
+    } else {
+      user = auth;
+    }
+  }
+
+  // 1. 认证协商: 0x00=无认证, 0x02=用户密码认证
+  if (user && pass) {
+    await writer.write(new Uint8Array([0x05, 0x02, 0x00, 0x02]));
+  } else {
+    await writer.write(new Uint8Array([0x05, 0x01, 0x00]));
+  }
+
+  var authReply = await bufReader.readBytes(2);
+  if (authReply[0] !== 0x05) {
+    writer.releaseLock();
+    reader.releaseLock();
+    throw new Error('无效的 SOCKS5 响应版本: ' + authReply[0]);
+  }
+
+  if (authReply[1] === 0x02) {
+    // RFC 1929 用户名密码认证
+    var userBytes = new TextEncoder().encode(user);
+    var passBytes = new TextEncoder().encode(pass);
+    var authBuf = new Uint8Array(3 + userBytes.length + passBytes.length);
+    authBuf[0] = 0x01;
+    authBuf[1] = userBytes.length;
+    authBuf.set(userBytes, 2);
+    authBuf[2 + userBytes.length] = passBytes.length;
+    authBuf.set(passBytes, 3 + userBytes.length);
+    await writer.write(authBuf);
+
+    var authResult = await bufReader.readBytes(2);
+    if (authResult[1] !== 0x00) {
+      writer.releaseLock();
+      reader.releaseLock();
+      throw new Error('SOCKS5 用户名密码认证失败');
+    }
+  } else if (authReply[1] !== 0x00) {
+    writer.releaseLock();
+    reader.releaseLock();
+    throw new Error('SOCKS5 认证方式被拒绝: ' + authReply[1]);
+  }
+
+  // 2. 发起 CONNECT 请求 (域名寻址 ATYP=0x03)
+  var hostBytes = new TextEncoder().encode(targetHost);
+  var req = new Uint8Array(4 + 1 + hostBytes.length + 2);
+  req[0] = 0x05; // VER
+  req[1] = 0x01; // CMD: CONNECT
+  req[2] = 0x00; // RSV
+  req[3] = 0x03; // ATYP: DOMAINNAME
+  req[4] = hostBytes.length;
+  req.set(hostBytes, 5);
+  req[5 + hostBytes.length] = (targetPort >> 8) & 0xff;
+  req[6 + hostBytes.length] = targetPort & 0xff;
+  await writer.write(req);
+
+  // 3. 读取连接响应
+  var reply = await bufReader.readBytes(4);
+  if (reply[0] !== 0x05) {
+    writer.releaseLock();
+    reader.releaseLock();
+    throw new Error('SOCKS5 无效的连接应答: ' + reply[0]);
+  }
+  if (reply[1] !== 0x00) {
+    writer.releaseLock();
+    reader.releaseLock();
+    throw new Error('SOCKS5 连接目标失败，状态码: ' + reply[1]);
+  }
+
+  // 读取并消耗绑定的地址和端口
+  var atyp = reply[3];
+  if (atyp === 0x01) {
+    await bufReader.readBytes(4 + 2); // IPv4
+  } else if (atyp === 0x03) {
+    var dlen = await bufReader.readBytes(1);
+    await bufReader.readBytes(dlen[0] + 2); // 域名 + 端口
+  } else if (atyp === 0x04) {
+    await bufReader.readBytes(16 + 2); // IPv6
+  }
+
+  var remaining = bufReader.getRemainingBuffer();
+  writer.releaseLock();
+  reader.releaseLock();
+  return { remaining: remaining };
+}
+
+/**
+ * 建立 SOCKS4a 隧道
+ */
+async function establishSocks4Tunnel(socket, targetHost, targetPort, auth) {
+  var writer = socket.writable.getWriter();
+  var reader = socket.readable.getReader();
+  var bufReader = new BufferedStreamReader(reader);
+
+  var hostBytes = new TextEncoder().encode(targetHost);
+  var userBytes = auth ? new TextEncoder().encode(auth.split(':')[0]) : new Uint8Array(0);
+
+  // SOCKS4a 数据包: VN(4) + CD(1) + DSTPORT(2) + DSTIP(4=0.0.0.1) + USERID + NULL + HOST + NULL
+  var packet = new Uint8Array(9 + userBytes.length + hostBytes.length + 1);
+  packet[0] = 0x04;
+  packet[1] = 0x01;
+  packet[2] = (targetPort >> 8) & 0xff;
+  packet[3] = targetPort & 0xff;
+  packet[4] = 0; packet[5] = 0; packet[6] = 0; packet[7] = 1; // SOCKS4a 标记
+  packet.set(userBytes, 8);
+  packet[8 + userBytes.length] = 0x00;
+  packet.set(hostBytes, 9 + userBytes.length);
+  packet[packet.length - 1] = 0x00;
+
+  await writer.write(packet);
+
+  var reply = await bufReader.readBytes(8);
+  if (reply[1] !== 0x5a) {
+    writer.releaseLock();
+    reader.releaseLock();
+    throw new Error('SOCKS4 连接被拒绝，应答码: ' + reply[1]);
+  }
+
+  var remaining = bufReader.getRemainingBuffer();
+  writer.releaseLock();
+  reader.releaseLock();
+  return { remaining: remaining };
+}
+
+/**
+ * 创建 HTTP 分块传输解码流 (Chunked Transfer Decoder)
+ * 支持打字机 SSE 流式实时解包
+ */
+function createChunkedDecoderStream(initialBuffer, rawReader) {
+  var buffer = initialBuffer ? new Uint8Array(initialBuffer) : new Uint8Array(0);
+  var streamClosed = false;
+
+  function appendBuffer(a, b) {
+    var res = new Uint8Array(a.length + b.length);
+    res.set(a);
+    res.set(b, a.length);
+    return res;
+  }
+
+  return new ReadableStream({
+    async pull(controller) {
+      if (streamClosed) {
+        controller.close();
+        return;
+      }
+
+      while (true) {
+        var crlfIdx = -1;
+        for (var i = 0; i < buffer.length - 1; i++) {
+          if (buffer[i] === 0x0d && buffer[i + 1] === 0x0a) {
+            crlfIdx = i;
+            break;
+          }
+        }
+
+        if (crlfIdx === -1) {
+          var res = await rawReader.read();
+          if (res.done) {
+            streamClosed = true;
+            if (buffer.length > 0) controller.enqueue(buffer);
+            controller.close();
+            return;
+          }
+          buffer = appendBuffer(buffer, res.value);
+          continue;
+        }
+
+        var lineStr = new TextDecoder().decode(buffer.subarray(0, crlfIdx)).trim();
+        var semiIdx = lineStr.indexOf(';');
+        if (semiIdx !== -1) lineStr = lineStr.substring(0, semiIdx).trim();
+        var chunkSize = parseInt(lineStr, 16);
+
+        if (isNaN(chunkSize)) {
+          streamClosed = true;
+          if (buffer.length > 0) controller.enqueue(buffer);
+          controller.close();
+          return;
+        }
+
+        if (chunkSize === 0) {
+          streamClosed = true;
+          controller.close();
+          return;
+        }
+
+        var totalNeeded = crlfIdx + 2 + chunkSize + 2;
+        while (buffer.length < totalNeeded) {
+          var more = await rawReader.read();
+          if (more.done) {
+            var partial = buffer.subarray(crlfIdx + 2);
+            if (partial.length > 0) controller.enqueue(partial);
+            streamClosed = true;
+            controller.close();
+            return;
+          }
+          buffer = appendBuffer(buffer, more.value);
+        }
+
+        var chunkData = buffer.subarray(crlfIdx + 2, crlfIdx + 2 + chunkSize);
+        controller.enqueue(chunkData);
+        buffer = buffer.subarray(totalNeeded);
+        return;
+      }
+    },
+    cancel() {
+      streamClosed = true;
+      try { rawReader.cancel(); } catch (e) {}
+    }
+  });
+}
+
+/**
+ * 创建非分块传输原始解码流
+ */
+function createRawDecoderStream(initialBuffer, rawReader, contentLength) {
+  var buffer = initialBuffer ? new Uint8Array(initialBuffer) : new Uint8Array(0);
+  var emitted = 0;
+  var streamClosed = false;
+
+  return new ReadableStream({
+    async pull(controller) {
+      if (streamClosed) {
+        controller.close();
+        return;
+      }
+
+      if (buffer.length > 0) {
+        var toSend = buffer;
+        if (contentLength !== null && emitted + toSend.length > contentLength) {
+          toSend = toSend.subarray(0, contentLength - emitted);
+          streamClosed = true;
+        }
+        emitted += toSend.length;
+        buffer = new Uint8Array(0);
+        controller.enqueue(toSend);
+        if (contentLength !== null && emitted >= contentLength) {
+          streamClosed = true;
+          controller.close();
+        }
+        return;
+      }
+
+      var res = await rawReader.read();
+      if (res.done) {
+        streamClosed = true;
+        controller.close();
+        return;
+      }
+      var data = res.value;
+      if (contentLength !== null && emitted + data.length > contentLength) {
+        data = data.subarray(0, contentLength - emitted);
+        streamClosed = true;
+      }
+      emitted += data.length;
+      controller.enqueue(data);
+      if (contentLength !== null && emitted >= contentLength) {
+        streamClosed = true;
+        controller.close();
+      }
+    },
+    cancel() {
+      streamClosed = true;
+      try { rawReader.cancel(); } catch (e) {}
+    }
+  });
+}
+
+/**
+ * 自动连通性测试单个代理
+ * 真实建立到 gemini.google.com:443 的握手隧道，测试延迟并验证连通性
+ * 
+ * @param {Object} proxy - 代理对象
+ * @param {number} timeoutMs - 超时毫秒数
+ * @returns {Promise<{ok: boolean, latency?: number, error?: string}>}
+ */
+async function testProxy(proxy, timeoutMs) {
+  timeoutMs = timeoutMs || 2000;
+  var socket = null;
+  var startTime = Date.now();
+  var timer = null;
+
+  try {
+    var testPromise = (async function () {
+      socket = connect({ hostname: proxy.host, port: proxy.port });
+      if (proxy.protocol === 'socks5') {
+        await establishSocks5Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
+      } else if (proxy.protocol === 'socks4') {
+        await establishSocks4Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
+      } else {
+        await establishHttpConnectTunnel(socket, 'gemini.google.com', 443, proxy.auth);
+      }
+      return true;
+    })();
+
+    var timeoutPromise = new Promise(function (_, reject) {
+      timer = setTimeout(function () {
+        reject(new Error('测试超时 (' + timeoutMs + 'ms)'));
+      }, timeoutMs);
+    });
+
+    await Promise.race([testPromise, timeoutPromise]);
+    clearTimeout(timer);
+    var latency = Date.now() - startTime;
+    try { socket.close(); } catch (e) {}
+    return { ok: true, latency: latency };
+  } catch (err) {
+    if (timer) clearTimeout(timer);
+    if (socket) {
+      try { socket.close(); } catch (e) {}
+    }
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * 通过指定代理发送 HTTP 请求
+ * 支持流式与非流式
+ * 
+ * @param {string} url - 目标 URL
+ * @param {Object} options - fetch 选项 (method, headers, body, signal)
+ * @param {Object} proxy - 代理对象
+ * @param {Object} config - 配置对象
+ * @returns {Promise<Response>} HTTP 响应对象
+ */
+async function fetchViaProxy(url, options, proxy, config) {
+  var socket = null;
+  var timer = null;
+  var timeoutMs = (config.requestTimeoutSec || 28) * 1000;
+
+  try {
+    var run = async function () {
+      socket = connect({ hostname: proxy.host, port: proxy.port });
+
+      if (options.signal) {
+        if (options.signal.aborted) {
+          try { socket.close(); } catch (e) {}
+          throw new Error('请求已取消');
+        }
+        options.signal.addEventListener('abort', function () {
+          try { socket.close(); } catch (e) {}
+        });
+      }
+
+      // 建立到 gemini.google.com:443 的隧道
+      if (proxy.protocol === 'socks5') {
+        await establishSocks5Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
+      } else if (proxy.protocol === 'socks4') {
+        await establishSocks4Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
+      } else {
+        await establishHttpConnectTunnel(socket, 'gemini.google.com', 443, proxy.auth);
+      }
+
+      // 升级 TLS 会话
+      var tlsSocket = socket.startTls({ servername: 'gemini.google.com' });
+
+      // 构建 HTTP/1.1 请求报文
+      var urlObj = new URL(url);
+      var pathAndQuery = urlObj.pathname + urlObj.search;
+      var reqLines = [
+        (options.method || 'POST') + ' ' + pathAndQuery + ' HTTP/1.1',
+        'Host: ' + urlObj.host,
+      ];
+
+      var headers = options.headers || {};
+      var entries = headers instanceof Headers ? headers.entries() : Object.entries(headers);
+      for (var entry of entries) {
+        var k = entry[0];
+        var v = entry[1];
+        if (k.toLowerCase() === 'host') continue;
+        reqLines.push(k + ': ' + v);
+      }
+
+      var bodyBytes = null;
+      if (options.body) {
+        if (typeof options.body === 'string') {
+          bodyBytes = new TextEncoder().encode(options.body);
+        } else if (options.body instanceof Uint8Array) {
+          bodyBytes = options.body;
+        }
+      }
+
+      if (bodyBytes) {
+        reqLines.push('Content-Length: ' + bodyBytes.length);
+      }
+      reqLines.push('Connection: close');
+      reqLines.push('');
+      reqLines.push('');
+
+      var reqHeaderBytes = new TextEncoder().encode(reqLines.join('\r\n'));
+      var writer = tlsSocket.writable.getWriter();
+      if (bodyBytes) {
+        var fullBytes = new Uint8Array(reqHeaderBytes.length + bodyBytes.length);
+        fullBytes.set(reqHeaderBytes);
+        fullBytes.set(bodyBytes, reqHeaderBytes.length);
+        await writer.write(fullBytes);
+      } else {
+        await writer.write(reqHeaderBytes);
+      }
+      writer.releaseLock();
+
+      // 读取响应
+      var reader = tlsSocket.readable.getReader();
+      var bufReader = new BufferedStreamReader(reader);
+
+      var resHeaderBytes = await bufReader.readUntil('\r\n\r\n');
+      var resHeaderStr = new TextDecoder().decode(resHeaderBytes);
+      var lines = resHeaderStr.split('\r\n');
+      var statusLine = lines[0] || '';
+      var statusMatch = statusLine.match(/HTTP\/\d(?:\.\d)?\s+(\d+)\s*(.*)/i);
+      var statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 200;
+      var statusText = statusMatch ? statusMatch[2].trim() : 'OK';
+
+      var respHeaders = new Headers();
+      for (var i = 1; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line.trim()) continue;
+        var colonIdx = line.indexOf(':');
+        if (colonIdx !== -1) {
+          respHeaders.append(line.substring(0, colonIdx).trim(), line.substring(colonIdx + 1).trim());
+        }
+      }
+
+      var remaining = bufReader.getRemainingBuffer();
+      var isChunked = (respHeaders.get('transfer-encoding') || '').toLowerCase().indexOf('chunked') !== -1;
+      var clHeader = respHeaders.get('content-length');
+      var contentLength = clHeader ? parseInt(clHeader, 10) : null;
+
+      var bodyStream;
+      if (isChunked) {
+        bodyStream = createChunkedDecoderStream(remaining, reader);
+      } else {
+        bodyStream = createRawDecoderStream(remaining, reader, contentLength);
+      }
+
+      var contentEncoding = (respHeaders.get('content-encoding') || '').toLowerCase();
+      if (contentEncoding === 'gzip' && typeof DecompressionStream !== 'undefined') {
+        bodyStream = bodyStream.pipeThrough(new DecompressionStream('gzip'));
+      } else if (contentEncoding === 'deflate' && typeof DecompressionStream !== 'undefined') {
+        bodyStream = bodyStream.pipeThrough(new DecompressionStream('deflate'));
+      }
+
+      return new Response(bodyStream, {
+        status: statusCode,
+        statusText: statusText,
+        headers: respHeaders,
+      });
+    };
+
+    var timeoutPromise = new Promise(function (_, reject) {
+      timer = setTimeout(function () {
+        reject(new Error('代理请求超时 (' + timeoutMs + 'ms)'));
+      }, timeoutMs);
+    });
+
+    var resp = await Promise.race([run(), timeoutPromise]);
+    clearTimeout(timer);
+    return resp;
+  } catch (err) {
+    if (timer) clearTimeout(timer);
+    if (socket) {
+      try { socket.close(); } catch (e) {}
+    }
+    throw err;
+  }
+}
+
+/**
+ * 获取候选代理列表（从源 URL 与静态配置中拉取）
+ */
+async function fetchProxyCandidates(config) {
+  var proxies = [];
+  var seen = new Set();
+
+  // 1. 用户自定义固定静态代理
+  if (config.proxy && config.proxy.staticProxies && config.proxy.staticProxies.length > 0) {
+    for (var sp of config.proxy.staticProxies) {
+      var parsed = parseProxy(sp);
+      if (parsed) {
+        var key = parsed.host + ':' + parsed.port;
+        if (!seen.has(key)) {
+          seen.add(key);
+          proxies.push(parsed);
+        }
+      }
+    }
+  }
+
+  // 2. 从主代理源拉取 (ProxyScrape 200ms timeout API)
+  var fetchedText = '';
+  if (config.proxy && config.proxy.sourceUrl) {
+    try {
+      var res = await fetch(config.proxy.sourceUrl, {
+        headers: { 'User-Agent': 'curl/8.0.0' }
+      });
+      if (res.ok) {
+        fetchedText = await res.text();
+      }
+    } catch (e) {
+      log('获取主代理源失败: ' + e.message + '，尝试备用源...', 'WARN', config);
+    }
+  }
+
+  // 3. 若主代理源为空，拉取备用源 (GitHub raw 完整列表)
+  if (!fetchedText.trim() && config.proxy && config.proxy.fallbackSourceUrl) {
+    try {
+      var fbRes = await fetch(config.proxy.fallbackSourceUrl, {
+        headers: { 'User-Agent': 'curl/8.0.0' }
+      });
+      if (fbRes.ok) {
+        fetchedText = await fbRes.text();
+      }
+    } catch (e) {
+      log('获取备用代理源失败: ' + e.message, 'WARN', config);
+    }
+  }
+
+  // 解析并去重
+  if (fetchedText) {
+    var lines = fetchedText.split('\n');
+    for (var line of lines) {
+      var trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      var p = parseProxy(trimmed);
+      if (p) {
+        var pkey = p.host + ':' + p.port;
+        if (!seen.has(pkey)) {
+          seen.add(pkey);
+          proxies.push(p);
+        }
+      }
+    }
+  }
+
+  return proxies;
+}
+
+/**
+ * 刷新代理池：获取、测试、排序并持久化（支持 24 小时更新）
+ * 
+ * @param {Object} config - 配置对象
+ * @param {Object} env - 环境变量
+ * @param {Object} ctx - 上下文
+ * @param {boolean} force - 是否强制刷新（忽略缓存）
+ * @returns {Promise<Array>} 刷新后的可用代理列表
+ */
+async function refreshProxyPool(config, env, ctx, force) {
+  if (globalProxyState.isUpdating) {
+    return globalProxyState.proxies;
+  }
+  globalProxyState.isUpdating = true;
+
+  try {
+    var kv = env ? (env.PROXY_KV || env.PROXIES_KV || null) : null;
+
+    // 非强制刷新时尝试从 KV 缓存加载
+    if (kv && !force) {
+      try {
+        var cachedData = await kv.get('active_proxies', 'json');
+        var cachedTime = await kv.get('active_proxies_time');
+        var age = cachedTime ? (Date.now() - parseInt(cachedTime, 10)) : Infinity;
+        var maxAge = (config.proxy.updateIntervalHours || 24) * 3600 * 1000;
+        if (cachedData && Array.isArray(cachedData) && cachedData.length > 0 && age < maxAge) {
+          globalProxyState.proxies = cachedData;
+          globalProxyState.lastUpdated = parseInt(cachedTime, 10);
+          log('从 KV 缓存加载 ' + cachedData.length + ' 个已验证代理', 'INFO', config);
+          globalProxyState.isUpdating = false;
+          return globalProxyState.proxies;
+        }
+      } catch (kvErr) {
+        log('读取代理 KV 缓存失败: ' + kvErr.message, 'WARN', config);
+      }
+    }
+
+    log('正在获取并更新代理池...', 'INFO', config);
+    var candidates = await fetchProxyCandidates(config);
+    log('共获取到 ' + candidates.length + ' 个候选代理', 'INFO', config);
+
+    if (candidates.length === 0) {
+      log('未能获取到任何候选代理', 'WARN', config);
+      globalProxyState.isUpdating = false;
+      return globalProxyState.proxies;
+    }
+
+    // 自动测试连通性
+    if (config.proxy && config.proxy.autoTest) {
+      var verified = [];
+      var batchSize = 6;
+      var maxPool = config.proxy.maxPoolSize || 30;
+      var testTimeout = config.proxy.testTimeoutMs || 2000;
+
+      // 限制测试候选数量，防止超量消耗 Worker 资源
+      var toTest = candidates.slice(0, Math.min(candidates.length, maxPool * 2));
+
+      for (var i = 0; i < toTest.length && verified.length < maxPool; i += batchSize) {
+        var batch = toTest.slice(i, i + batchSize);
+        var testResults = await Promise.allSettled(batch.map(function (c) {
+          return testProxy(c, testTimeout).then(function (res) {
+            return { candidate: c, result: res };
+          });
+        }));
+
+        for (var tr of testResults) {
+          if (tr.status === 'fulfilled' && tr.value.result.ok) {
+            var cand = tr.value.candidate;
+            cand.latency = tr.value.result.latency;
+            cand.fails = 0;
+            verified.push(cand);
+          }
+        }
+      }
+
+      // 按延迟从低到高升序排列（优选低延迟代理）
+      verified.sort(function (a, b) { return a.latency - b.latency; });
+      globalProxyState.proxies = verified;
+      log('代理测试完成，有效代理数量: ' + verified.length, 'INFO', config);
+    } else {
+      globalProxyState.proxies = candidates.slice(0, config.proxy.maxPoolSize || 30).map(function (c) {
+        c.latency = 0;
+        c.fails = 0;
+        return c;
+      });
+      log('已加载 ' + globalProxyState.proxies.length + ' 个代理（未开启预测试）', 'INFO', config);
+    }
+
+    globalProxyState.lastUpdated = Date.now();
+
+    // 持久化到 Cloudflare KV
+    if (kv && globalProxyState.proxies.length > 0) {
+      try {
+        var ttl = (config.proxy.updateIntervalHours || 24) * 3600 * 2;
+        await kv.put('active_proxies', JSON.stringify(globalProxyState.proxies), { expirationTtl: ttl });
+        await kv.put('active_proxies_time', String(globalProxyState.lastUpdated), { expirationTtl: ttl });
+      } catch (kvPutErr) {
+        log('写入代理 KV 失败: ' + kvPutErr.message, 'WARN', config);
+      }
+    }
+  } catch (err) {
+    log('刷新代理池失败: ' + err.message, 'ERROR', config);
+  } finally {
+    globalProxyState.isUpdating = false;
+  }
+
+  return globalProxyState.proxies;
+}
+
+/**
+ * 确保代理池就绪或在 24 小时到期时触发静默后台刷新
+ */
+async function ensureProxyReady(config) {
+  if (!config.proxy || !config.proxy.enabled) return;
+  var now = Date.now();
+  var intervalMs = (config.proxy.updateIntervalHours || 24) * 3600 * 1000;
+
+  // 冷启动且代理池为空，同步初始化
+  if (globalProxyState.proxies.length === 0 && !globalProxyState.isUpdating) {
+    await refreshProxyPool(config, config._env, config._ctx, false);
+    return;
+  }
+
+  // 超过 24 小时更新间隔，后台异步触发刷新
+  if (now - globalProxyState.lastUpdated >= intervalMs && !globalProxyState.isUpdating) {
+    var task = refreshProxyPool(config, config._env, config._ctx, true);
+    if (config._ctx && typeof config._ctx.waitUntil === 'function') {
+      config._ctx.waitUntil(task);
+    }
+  }
+}
+
+/**
+ * 统一出站请求包装器 (geminiFetch)
+ * 具备自动代理路由、多代理故障轮换与降级回退直连功能
+ * 
+ * @param {string} url - 请求 URL
+ * @param {Object} options - 请求选项
+ * @param {Object} config - 配置对象
+ * @returns {Promise<Response>}
+ */
+async function geminiFetch(url, options, config) {
+  // 未开启代理时，直接使用标准直连 fetch
+  if (!config.proxy || !config.proxy.enabled) {
+    return fetch(url, options);
+  }
+
+  try {
+    await ensureProxyReady(config);
+  } catch (initErr) {
+    log('代理池初始化异常: ' + initErr.message, 'WARN', config);
+  }
+
+  var usableProxies = globalProxyState.proxies;
+  if (!usableProxies || usableProxies.length === 0) {
+    if (config.proxy.fallbackDirect) {
+      log('代理池暂无可用代理，自动降级回退到直连', 'WARN', config);
+      return fetch(url, options);
+    }
+    throw new Error('代理池无可用代理且 fallbackDirect 已禁用');
+  }
+
+  var maxTries = Math.min(3, usableProxies.length);
+  var lastError = null;
+
+  for (var i = 0; i < maxTries; i++) {
+    var proxy;
+    if (config.proxy.rotationMode === 'random') {
+      proxy = usableProxies[Math.floor(Math.random() * usableProxies.length)];
+    } else {
+      proxy = usableProxies[globalProxyState.currentIndex % usableProxies.length];
+      globalProxyState.currentIndex++;
+    }
+
+    try {
+      log('通过代理 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + '] 发送请求', 'INFO', config);
+      var resp = await fetchViaProxy(url, options, proxy, config);
+      return resp;
+    } catch (err) {
+      log('代理请求失败 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + ']: ' + err.message, 'WARN', config);
+      lastError = err;
+      proxy.fails = (proxy.fails || 0) + 1;
+      if (proxy.fails >= 2) {
+        globalProxyState.proxies = globalProxyState.proxies.filter(function (p) {
+          return p !== proxy;
+        });
+      }
+    }
+  }
+
+  if (config.proxy.fallbackDirect) {
+    log('所有代理尝试失败，自动降级回退到直连: ' + (lastError ? lastError.message : ''), 'WARN', config);
+    return fetch(url, options);
+  }
+
+  throw lastError || new Error('所有可用代理连接均失败');
+}
+
 // 📡 非流式 API 调用
-// ============================================================================
 
 /**
  * 非流式调用 Gemini API
@@ -1214,20 +2051,18 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
         controller.abort();  // 超时后中止请求
       }, config.requestTimeoutSec * 1000);
 
-      // 发送 HTTP POST 请求
-      var response = await fetch(url, {
+      // 发送 HTTP POST 请求（通过代理池或直连）
+      var response = await geminiFetch(url, {
         method: 'POST',
         headers: headers,
         body: body,
         signal: controller.signal,  // 关联中止信号
-      });
+      }, config);
 
       // 请求成功，清除超时定时器
       clearTimeout(timeout);
 
-      // ============================================================
       // 错误状态码处理
-      // ============================================================
 
       // 405 Method Not Allowed: BL 版本过期
       // Gemini 更新了前端，需要同步更新 geminiBl 配置
@@ -1284,9 +2119,7 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
   throw lastError;
 }
 
-// ============================================================================
 // 📝 文本处理
-// ============================================================================
 
 /**
  * 清理 Gemini 响应中的代码执行痕迹
@@ -1431,9 +2264,7 @@ function extractResponseText(raw) {
   return cleanGeminiText(text);
 }
 
-// ============================================================================
 // 🔄 OpenAI 格式转换
-// ============================================================================
 
 /**
  * 将 OpenAI 消息列表转换为 Gemini 提示文本
@@ -1443,13 +2274,13 @@ function extractResponseText(raw) {
  * 
  * 转换规则:
  * ┌──────────────┬──────────────────────────────────────────┐
- * │ OpenAI Role  │ Gemini 格式                               │
+ * │ OpenAI Role  │ Gemini 格式                              │
  * ├──────────────┼──────────────────────────────────────────┤
- * │ system       │ [System instruction]: {content}           │
- * │ assistant    │ [Assistant]: {content}                    │
- * │ tool         │ [Tool result for {name}]: {content}       │
- * │ user         │ {content}（直接使用）                      │
- * │ 工具调用      │ ```tool_call\n{json}\n``` 代码块格式      │
+ * │ system       │ [System instruction]: {content}          │
+ * │ assistant    │ [Assistant]: {content}                   │
+ * │ tool         │ [Tool result for {name}]: {content}      │
+ * │ user         │ {content}（直接使用）                    │
+ * │ 工具调用      │ ```tool_call\n{json}\n``` 代码块格式     │
  * └──────────────┴──────────────────────────────────────────┘
  * 
  * 多条消息之间使用双换行（\n\n）分隔。
@@ -1464,9 +2295,7 @@ function messagesToPrompt(messages, tools) {
   // 存储各个消息段的数组
   var parts = [];
 
-  // ================================================================
   // 第一步：如果提供了工具定义，在开头添加工具使用说明
-  // ================================================================
   if (tools && tools.length > 0) {
     // 标准化工具定义格式
     // 兼容两种格式:
@@ -1496,9 +2325,7 @@ function messagesToPrompt(messages, tools) {
     );
   }
 
-  // ================================================================
   // 第二步：逐条处理消息
-  // ================================================================
   for (var mi = 0; mi < messages.length; mi++) {
     var msg = messages[mi];
     var role = msg.role || 'user';     // 角色，默认为 user
@@ -1677,9 +2504,7 @@ function googleContentsToPrompt(req) {
   return parts.filter(function (p) { return p; }).join('\n\n');
 }
 
-// ============================================================================
 // 🚦 速率限制（Serverless 安全的内存存储）
-// ============================================================================
 
 // 使用 Map 数据结构存储每个 IP 的请求历史
 // Map 相对于普通 Object 的优势：
@@ -1734,9 +2559,8 @@ function checkRateLimit(clientIP, config) {
   timestamps.push(now);
   rateLimitStore.set(key, timestamps);
 
-  // ================================================================
   // 🛡️ 随机概率清理过期键（5% 概率触发）
-  // ================================================================
+  //
   // 防止长期高并发运行后，大量冷 IP 记录残留内存
   // 5% 的概率（约每 20 次检查触发一次）确保不会频繁执行
   if (Math.random() < 0.05) {
@@ -1759,9 +2583,7 @@ function checkRateLimit(clientIP, config) {
   return true;  // 允许请求
 }
 
-// ============================================================================
 // 🔐 API 密钥验证
-// ============================================================================
 
 /**
  * 验证 API 密钥（支持多种认证方式）
@@ -1786,9 +2608,7 @@ function checkApiKey(request, config) {
   // 如果没有配置任何密钥，允许所有请求（不验证模式）
   if (keys.length === 0) return true;
 
-  // ================================================================
   // 方式 1: Authorization: Bearer <key>
-  // ================================================================
   var auth = request.headers.get('Authorization') || '';
   // 检查是否以 "Bearer " 开头
   if (auth.indexOf('Bearer ') === 0) {
@@ -1798,18 +2618,14 @@ function checkApiKey(request, config) {
     if (keys.indexOf(token) !== -1) return true;
   }
 
-  // ================================================================
   // 方式 2 & 3: x-api-key / x-goog-api-key
-  // ================================================================
   var headerNames = ['x-api-key', 'x-goog-api-key'];
   for (var i = 0; i < headerNames.length; i++) {
     var value = request.headers.get(headerNames[i]) || '';
     if (keys.indexOf(value) !== -1) return true;
   }
 
-  // ================================================================
   // 方式 4: URL 查询参数 ?key=<key>
-  // ================================================================
   var url = new URL(request.url);
   var keyParam = url.searchParams.get('key');
   if (keyParam && keys.indexOf(keyParam) !== -1) return true;
@@ -1818,9 +2634,7 @@ function checkApiKey(request, config) {
   return false;
 }
 
-// ============================================================================
 // 📤 HTTP 响应构建
-// ============================================================================
 
 /**
  * 发送 JSON 格式的 HTTP 响应
@@ -1880,9 +2694,7 @@ function sendSSE(stream) {
   });
 }
 
-// ============================================================================
 // 🎯 模型解析
-// ============================================================================
 
 /**
  * 解析模型名称，获取对应的配置参数
@@ -1928,9 +2740,7 @@ function resolveModel(modelName) {
   };
 }
 
-// ============================================================================
 // 📋 核心请求处理 - /v1/chat/completions
-// ============================================================================
 
 /**
  * 处理 /v1/chat/completions 请求
@@ -1961,7 +2771,7 @@ function resolveModel(modelName) {
  * @returns {Promise<Response>} HTTP 响应对象
  */
 async function handleChatCompletions(request, body, config) {
-  // ---- 第一步：解析模型 ----
+  // -- 第一步：解析模型
   var resolved = resolveModel(body.model || config.defaultModel);
   if (resolved.error) {
     return sendJSON({ error: { message: resolved.error } }, 400);
@@ -1972,7 +2782,7 @@ async function handleChatCompletions(request, body, config) {
   var thinkMode = resolved.thinkMode;
   var tools = body.tools || null;
 
-  // ---- 第二步：转换消息为提示文本 ----
+  // -- 第二步：转换消息为提示文本
   var prompt = messagesToPrompt(body.messages || [], tools);
   if (!prompt.trim()) {
     return sendJSON({ error: { message: 'empty prompt' } }, 400);
@@ -1983,9 +2793,8 @@ async function handleChatCompletions(request, body, config) {
 
   log('Chat: model=' + modelName + ', stream=' + stream + ', tokens≈' + estimateTokens(prompt), 'INFO', config);
 
-  // ================================================================
   // 情况 A：非流式或带工具调用
-  // ================================================================
+  //
   // 工具调用需要完整的响应文本才能解析 tool_call 代码块
   // 所以即使请求了 stream=true，如果有 tools 也强制使用非流式
   if (!stream || tools) {
@@ -2052,14 +2861,12 @@ async function handleChatCompletions(request, body, config) {
     }
   }
 
-  // ================================================================
   // 情况 B：真流式 SSE 响应（打字机效果）
-  // ================================================================
   var streamEncoder = new TextEncoder();
 
   var streamBody = new ReadableStream({
     start: function (controller) {
-      // ---- 状态管理变量 ----
+      // -- 状态管理变量
       var heartbeatTimer = null;  // 心跳定时器 ID
       var isFinished = false;      // 流是否已经结束（防止重复关闭）
 
@@ -2113,7 +2920,7 @@ async function handleChatCompletions(request, body, config) {
       // 因为 ReadableStream 的 start 不能是 async 函数
       (async function () {
         try {
-          // ---- 第一步：发送 role 声明块 ----
+          // -- 第一步：发送 role 声明块
           // 符合 OpenAI 标准：首块只包含 role，不包含 content
           // 这告诉客户端："接下来是 assistant 角色的消息"
           controller.enqueue(streamEncoder.encode('data: ' + JSON.stringify({
@@ -2128,7 +2935,7 @@ async function handleChatCompletions(request, body, config) {
             }],
           }) + '\n\n'));
 
-          // ---- 第二步：启动心跳定时器 ----
+          // -- 第二步：启动心跳定时器
           // 每 2 秒发送一次 SSE 注释（以冒号开头的行）
           // 客户端会忽略注释行，但连接保持活跃
           // 这防止了长时间无数据时连接被中间代理断开
@@ -2145,7 +2952,7 @@ async function handleChatCompletions(request, body, config) {
             }
           }, 2000);
 
-          // ---- 第三步：构建并发送 Gemini 请求（含重试逻辑）----
+          // -- 第三步：构建并发送 Gemini 请求（含重试逻辑）----
           var reqBody = buildPayload(prompt, modelId, thinkMode, config);
           var url = buildUrl(config);
 
@@ -2177,13 +2984,13 @@ async function handleChatCompletions(request, body, config) {
             }, (config.requestTimeoutSec - 2) * 1000);
 
             try {
-              // 发送 HTTP POST 请求到 Gemini
-              var attemptResponse = await fetch(url, {
+              // 发送 HTTP POST 请求到 Gemini（通过代理池或直连）
+              var attemptResponse = await geminiFetch(url, {
                 method: 'POST',
                 headers: headers,
                 body: reqBody,
                 signal: fetchController.signal,
-              });
+              }, config);
               clearTimeout(fetchTimeout);
 
               // 检查响应状态码
@@ -2242,7 +3049,7 @@ async function handleChatCompletions(request, body, config) {
             throw lastStreamError || new Error('流式请求失败，所有重试已耗尽');
           }
 
-          // ---- 第四步：读取流式响应并实时转发增量数据 ----
+          // -- 第四步：读取流式响应并实时转发增量数据
           var reader = response.body.getReader();
           var decoder = new TextDecoder();
           var buffer = '';      // 行缓冲区（处理不完整的行）
@@ -2326,7 +3133,7 @@ async function handleChatCompletions(request, body, config) {
             }
           }
 
-          // ---- 第五步：正常结束流 ----
+          // -- 第五步：正常结束流
           finishStream('stop');
 
         } catch (error) {
@@ -2594,9 +3401,7 @@ async function handleGoogleAPI(request, body, stream, config) {
   }
 }
 
-// ============================================================================
 // 🚀 主入口 - Cloudflare Workers fetch 事件处理器
-// ============================================================================
 
 export default {
   /**
@@ -2624,9 +3429,9 @@ export default {
    * @returns {Promise<Response>} HTTP 响应对象
    */
   async fetch(request, env, ctx) {
-    // ================================================================
+
     // 第一步：OPTIONS CORS 预检请求优先处理
-    // ================================================================
+    //
     // 浏览器在发送跨域 POST 请求前会先发送 OPTIONS 预检请求。
     // 必须返回正确的 CORS 头，否则浏览器会阻止实际请求。
     // 这个处理必须在所有其他逻辑之前完成。
@@ -2642,22 +3447,20 @@ export default {
       });
     }
 
-    // ================================================================
     // 第二步：为当前请求创建独立的配置副本
-    // ================================================================
+    //
     // 🔑 这是解决并发串扰问题的核心步骤。
     // 不修改任何全局变量，每个请求都有自己专属的 config 对象。
     // env 参数是 Cloudflare 为每个请求独立提供的环境变量。
-    var config = getRequestConfig(env);
+    var config = getRequestConfig(env, ctx);
 
     // 解析请求 URL 和方法
     var requestUrl = new URL(request.url);
     var path = requestUrl.pathname;
     var method = request.method;
 
-    // ================================================================
     // 第三步：速率限制检查
-    // ================================================================
+    //
     // 使用 Cloudflare 提供的真实客户端 IP（CF-Connecting-IP 头）
     // 如果取不到（非 CF 代理），使用默认值 0.0.0.0
     var clientIP = request.headers.get('CF-Connecting-IP') || '0.0.0.0';
@@ -2671,38 +3474,89 @@ export default {
       }, 429);  // HTTP 429 Too Many Requests
     }
 
-    // ================================================================
     // 第四步：API 密钥验证
-    // ================================================================
+    //
     // 仅对 /v1 路径的请求进行密钥验证
-    // /health 等公共端点不需要验证
+    // /health, /proxies 等公共端点不需要验证
     if (path.indexOf('/v1') === 0 && !checkApiKey(request, config)) {
       return sendJSON({
         error: { message: 'invalid api key' },
       }, 401);  // HTTP 401 Unauthorized
     }
 
-    // ================================================================
     // 第五步：GET 请求处理
-    // ================================================================
+    //
     if (method === 'GET') {
-      // ---- 健康检查端点 ----
+      // -- 健康检查端点
       // 可用于监控 Worker 是否正常运行
-      // 返回版本号、模型列表、配置状态等信息
+      // 返回版本号、模型列表、配置状态、代理池状态等信息
       if (path === '/' || path === '/health') {
         return sendJSON({
           status: 'ok',
-          version: '1.6.0-cf-multifingerprint',
+          version: '1.7.0-cf-autoproxy',
           platform: 'Cloudflare Workers',
           models: Object.keys(MODELS),
           defaultModel: config.defaultModel,
           geminiBl: config.geminiBl,
           hasCookie: !!config.cookieString,
           hasSapisid: !!config.sapisid,
+          proxy: {
+            enabled: config.proxy.enabled,
+            activeCount: globalProxyState.proxies.length,
+            lastUpdated: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated).toISOString() : null,
+            nextUpdate: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated + (config.proxy.updateIntervalHours || 24) * 3600 * 1000).toISOString() : null,
+            sourceUrl: config.proxy.sourceUrl,
+            rotationMode: config.proxy.rotationMode,
+          },
         });
       }
 
-      // ---- OpenAI 格式模型列表 ----
+      // -- 代理池状态端点
+      if (path === '/proxies') {
+        return sendJSON({
+          status: 'ok',
+          proxyPool: {
+            enabled: config.proxy.enabled,
+            totalActive: globalProxyState.proxies.length,
+            lastUpdated: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated).toISOString() : null,
+            nextUpdate: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated + (config.proxy.updateIntervalHours || 24) * 3600 * 1000).toISOString() : null,
+            updateIntervalHours: config.proxy.updateIntervalHours,
+            sourceUrl: config.proxy.sourceUrl,
+            fallbackSourceUrl: config.proxy.fallbackSourceUrl,
+            autoTest: config.proxy.autoTest,
+            testTimeoutMs: config.proxy.testTimeoutMs,
+            fallbackDirect: config.proxy.fallbackDirect,
+            rotationMode: config.proxy.rotationMode,
+            proxies: globalProxyState.proxies.map(function (p) {
+              return {
+                url: p.protocol + '://' + p.host + ':' + p.port,
+                protocol: p.protocol,
+                latencyMs: p.latency,
+                fails: p.fails || 0,
+              };
+            }),
+          },
+        });
+      }
+
+      // -- 手动强制刷新代理池端点 (GET /proxies/refresh)
+      if (path === '/proxies/refresh') {
+        var refreshed = await refreshProxyPool(config, env, ctx, true);
+        return sendJSON({
+          status: 'ok',
+          message: '代理池已完成刷新与测速',
+          activeCount: refreshed.length,
+          proxies: refreshed.map(function (p) {
+            return {
+              url: p.protocol + '://' + p.host + ':' + p.port,
+              protocol: p.protocol,
+              latencyMs: p.latency,
+            };
+          }),
+        });
+      }
+
+      // -- OpenAI 格式模型列表
       // 返回所有可用模型的信息
       // 客户端（NextChat、Cherry Studio 等）会调用此端点获取模型列表
       if (path === '/v1/models') {
@@ -2722,7 +3576,7 @@ export default {
         return sendJSON({ object: 'list', data: modelList });
       }
 
-      // ---- Google 原生格式模型列表 ----
+      // -- Google 原生格式模型列表
       // 用于 Gemini CLI 等工具的模型发现
       if (path === '/v1beta/models') {
         var googleModels = [];
@@ -2744,10 +3598,26 @@ export default {
       return sendJSON({ error: { message: 'not found' } }, 404);
     }
 
-    // ================================================================
     // 第六步：POST 请求处理
-    // ================================================================
+    //
     if (method === 'POST') {
+      // -- 代理池手动刷新端点 (POST /proxies/refresh)
+      if (path === '/proxies/refresh') {
+        var refreshedPost = await refreshProxyPool(config, env, ctx, true);
+        return sendJSON({
+          status: 'ok',
+          message: '代理池已完成刷新与测速',
+          activeCount: refreshedPost.length,
+          proxies: refreshedPost.map(function (p) {
+            return {
+              url: p.protocol + '://' + p.host + ':' + p.port,
+              protocol: p.protocol,
+              latencyMs: p.latency,
+            };
+          }),
+        });
+      }
+
       var body;
       try {
         body = await request.json();
@@ -2755,28 +3625,28 @@ export default {
         return sendJSON({ error: { message: 'invalid JSON' } }, 400);
       }
 
-      // ---- OpenAI Chat Completions API ----
+      // -- OpenAI Chat Completions API
       // 这是最常用的端点，处理聊天补全请求
       if (path === '/v1/chat/completions') {
         return handleChatCompletions(request, body, config);
       }
 
-      // ---- OpenAI Responses API（Codex CLI 兼容） ----
+      // -- OpenAI Responses API（Codex CLI 兼容）
       if (path === '/v1/responses') {
         return handleResponses(request, body, config);
       }
 
-      // ---- Google 原生 streamGenerateContent（流式） ----
+      // -- Google 原生 streamGenerateContent（流式）
       if (path.indexOf(':streamGenerateContent') !== -1) {
         return handleGoogleAPI(request, body, true, config);
       }
 
-      // ---- Google 原生 generateContent（非流式） ----
+      // -- Google 原生 generateContent（非流式）
       if (path.indexOf(':generateContent') !== -1) {
         return handleGoogleAPI(request, body, false, config);
       }
 
-      // ---- 万能兜底路由 ----
+      // -- 万能兜底路由
       // 所有 /v1/ 下的未匹配 POST 请求都自动转为 chat 处理
       // 兼容各种客户端的路径差异
       if (path.indexOf('/v1/') === 0) {
@@ -2787,9 +3657,27 @@ export default {
       return sendJSON({ error: { message: 'not found' } }, 404);
     }
 
-    // ================================================================
     // 第七步：未支持的 HTTP 方法
-    // ================================================================
+    //
     return sendJSON({ error: { message: 'method not allowed' } }, 405);
+  },
+
+  /**
+   * Cloudflare Workers 定时触发器（Cron Trigger）
+   * 默认每 24 小时 (0 0 * * *) 自动触发一次，后台静默拉取并测试最新代理
+   * 
+   * @param {Object} event - 定时事件元数据 (例如 event.cron)
+   * @param {Object} env - 环境变量
+   * @param {Object} ctx - 执行上下文 (ctx.waitUntil)
+   */
+  async scheduled(event, env, ctx) {
+    var config = getRequestConfig(env, ctx);
+    log('收到定时任务触发 (Cron: ' + (event && event.cron ? event.cron : '24h') + ')，正在刷新代理池...', 'INFO', config);
+    try {
+      var proxies = await refreshProxyPool(config, env, ctx, true);
+      log('定时刷新代理池成功，当前存活可用代理: ' + proxies.length + ' 个', 'INFO', config);
+    } catch (err) {
+      log('定时刷新代理池异常: ' + err.message, 'ERROR', config);
+    }
   },
 };

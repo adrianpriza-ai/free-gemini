@@ -16,6 +16,7 @@ Gemini Web2API is a serverless proxy service deployed on Cloudflare Workers that
 - **Multi-Cookie rotation**: Supports configuring multiple Google account cookies, randomly selected for use
 - **Concurrent safety**: Request-level configuration isolation, completely eliminating configuration crosstalk in high-concurrency scenarios
 - **Tool call support**: Compatible with OpenAI Function Calling format
+- **ProxyScrape Auto Proxy Rotation**: Automatically fetches free proxies from ProxyScrape (timeout <= 200ms API or GitHub raw), auto-tests connectivity against `gemini.google.com:443`, supports HTTP/SOCKS4/SOCKS5 via `cloudflare:sockets`, and updates every 24 hours (Cron Trigger + auto background refresh) with seamless direct fallback.
 
 ### Applicable Scenarios
 
@@ -81,7 +82,7 @@ If you see a JSON response similar to the following, deployment is successful:
 ### NextChat (ChatGPT-Next-Web)
 
 | Configuration Item | Value |
-|--------------------|-------|
+|-|-|
 | Interface Type | OpenAI |
 | Interface Address | `https://your-worker.workers.dev/v1` |
 | API Key | `sk-gemini` (default key) |
@@ -90,7 +91,7 @@ If you see a JSON response similar to the following, deployment is successful:
 ### Cherry Studio
 
 | Configuration Item | Value |
-|--------------------|-------|
+|-|-|
 | API Address | `https://your-worker.workers.dev/v1` |
 | API Key | `sk-gemini` |
 | Model | `gemini-3.6-flash` |
@@ -98,7 +99,7 @@ If you see a JSON response similar to the following, deployment is successful:
 ### ChatBox
 
 | Configuration Item | Value |
-|--------------------|-------|
+|-|-|
 | API Mode | OpenAI API |
 | API Domain | `https://your-worker.workers.dev` |
 | API Path | `/v1/chat/completions` |
@@ -137,7 +138,7 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 ### Authentication Related
 
 | Variable Name | Description | Example Value |
-|---------------|-------------|---------------|
+|-|-|-|
 | `COOKIE_STRING` | Gemini Cookie, multiple separated by `\|` | `cookie1\| cookie2\| cookie3` |
 | `SAPISID` | SAPISID value, multiple separated by `\|` | `sapisid1\| sapisid2\| sapisid3` |
 | `API_KEY` / `API_KEYS` | API Key, supports single string, comma/pipe-separated multiple keys, or JSON array | `my-secret-key` or `key1, key2` or `["sk-gemini", "my-key"]` |
@@ -145,7 +146,7 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 ### Gemini Configuration
 
 | Variable Name | Description | Example Value |
-|---------------|-------------|---------------|
+|-|-|-|
 | `GEMINI_BL` | Gemini build tag (update when encountering 405) | `boq_assistant-bard-web-server_20260907.07_p0` |
 | `DEFAULT_MODEL` | Default model | `gemini-3.6-flash` |
 | `AUTH_USER` | Multi-account index | `0` |
@@ -153,7 +154,7 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 ### Performance Optimization
 
 | Variable Name | Description | Default Value |
-|---------------|-------------|---------------|
+|-|-|-|
 | `RETRY_ATTEMPTS` | Retry attempts | `3` |
 | `RETRY_DELAY_SEC` | Retry interval (seconds) | `2` |
 | `REQUEST_TIMEOUT_SEC` | Request timeout (seconds) | `28` |
@@ -161,7 +162,36 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 | `RATE_LIMIT_MAX` | Rate limit maximum request count | `3000` |
 | `RATE_LIMIT_WINDOW` | Rate limit time window (seconds) | `60` |
 
+### 🌐 Auto Proxy Pool & 24h Update Configuration
+
+| Variable Name | Description | Default Value |
+|-|-|-|
+| `ENABLE_PROXY` | Enable/disable proxy rotation | `true` |
+| `PROXY_SOURCE_URL` | Primary proxy source URL (ProxyScrape 200ms API) | `https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text&timeout=200` |
+| `PROXY_FALLBACK_SOURCE_URL` | Fallback proxy source URL (GitHub raw full list) | `https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt` |
+| `STATIC_PROXIES` / `PROXY_URL` | Custom fixed proxies (comma/newline separated, e.g. `http://user:pass@ip:port`, `socks5://ip:port`) | (empty) |
+| `AUTO_TEST_PROXY` | Auto-test proxies before adding to verified pool | `true` |
+| `PROXY_TEST_TIMEOUT_MS` | Per-proxy connection test timeout (ms) | `2000` |
+| `PROXY_UPDATE_INTERVAL_HOURS` | Proxy pool auto-update interval (hours) | `24` |
+| `PROXY_MAX_POOL_SIZE` | Maximum verified proxies to keep in pool | `30` |
+| `PROXY_FALLBACK_DIRECT` | Fall back to direct connection if all proxies fail | `true` |
+| `PROXY_ROTATION_MODE` | Proxy selection algorithm (`round-robin` or `random`) | `round-robin` |
+
+#### How the 24-Hour Update Works:
+1. **Cloudflare Cron Trigger (Recommended)**:
+   - When deploying via Wrangler, `wrangler.jsonc` already configures `"triggers": { "crons": ["0 0 * * *"] }`.
+   - In Cloudflare Dashboard: Go to **Workers & Pages** → Your Worker → **Triggers** → **Cron Triggers** → **Add Cron Trigger** → enter `0 0 * * *` (every 24 hours at 00:00 UTC).
+2. **On-Demand Auto-Update**:
+   - Even if you don't configure a Cron Trigger, the Worker automatically checks the timestamp on incoming requests. If 24 hours have passed since the last update, it refreshes the proxy pool in the background using `ctx.waitUntil()` without slowing down user requests!
+3. **Cloudflare KV Persistence (Optional)**:
+   - Bind a KV namespace named `PROXY_KV` to your Worker. Verified proxies will be cached in KV across all edge data center instances!
+4. **Proxy Endpoints**:
+   - `GET /proxies`: View proxy pool status, active proxy count, latencies, and last/next update times.
+   - `POST /proxies/refresh` or `GET /proxies/refresh`: Force an immediate re-fetch and test of the proxy pool.
+   - `GET /health`: Includes live proxy status in the health check JSON.
+
 ---
+
 
 ## 🍪 How to Get Gemini Cookie
 
@@ -221,7 +251,7 @@ If you encounter `HTTP 405: Method Not Allowed` error, it means the Gemini front
 This program has a built-in browser fingerprint rotation system, where each request randomly selects different browser identifiers:
 
 | Fingerprint Type | Pool Size | Description |
-|------------------|-----------|-------------|
+|-|-|-|
 | User-Agent | 8 types | Weighted random, simulating real browser market share |
 | Accept-Language | 6 types | Uniform random, simulating users from different regions |
 | Sec-Ch-Ua | 3 types | Chrome version identifier (only added when Chrome UA) |
@@ -270,7 +300,7 @@ This program has a built-in browser fingerprint rotation system, where each requ
 ## 📊 Supported Model List
 
 | Model ID | Type | Description |
-|----------|------|-------------|
+|-|-|-|
 | `gemini-3.7-flash` | FAST | Latest all-round model (Gemini 3.7 Flash) |
 | `gemini-3.6-flash` | FAST | All-round model (Gemini 3.6 Flash) |
 | `gemini-3.5-flash` | FAST | Alias for 3.6 Flash |
@@ -292,7 +322,8 @@ Supports overriding thinking mode via `@think=` parameter:
 ## 📝 Changelog
 
 | Version | Date | Update Content |
-|---------|------|----------------|
+|-|-|-|
+| 1.7.0 | 2026-09-10 | Added ProxyScrape auto proxy fetching (timeout <= 200ms API or GitHub raw), auto connectivity test system via cloudflare:sockets (HTTP CONNECT, SOCKS5, SOCKS4), 24-hour automatic background update & Cron Trigger support (`0 0 * * *`), automatic failover & fallback to direct connection, `/proxies` and `/proxies/refresh` management endpoints |
 | 1.6.0 | 2026-09-09 | Upgraded to Chrome 132-134 fingerprint library, streaming request 429 automatic exponential backoff retry, support flexible environment variable `API_KEY` (string/comma-separated/JSON), added `gemini-3.7-flash` and 2.0/2.5 compatibility aliases, health check returns detailed status |
 | 1.5.0 | 2026-07-31 | Added multi-fingerprint rotation, multi-Cookie rotation, random delay mechanism |
 | 1.4.0 | 2026-07-30 | Fixed concurrent crosstalk, rate limiting memory safety |
@@ -303,4 +334,4 @@ Supports overriding thinking mode via `@think=` parameter:
 
 ## 📄 License
 
-This project is based on the original project [gemini-web2api](https://github.com/your-repo/gemini-web2api) ported, following the original project's open source license.
+This project is based on the original project [gemini-web2api](https://github.com/Sophomoresty/gemini-web2api) ported, following the original project's open source license.

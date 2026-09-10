@@ -35,7 +35,7 @@ python gemini_web2api.py
 ### Cherry Studio / ChatBox / 任何 OpenAI 兼容客户端
 
 | 字段 | 值 |
-|------|-----|
+|-||
 | Base URL | `http://localhost:8081/v1` |
 | API Key | `config.json` 中的任意 `api_keys`；未配置时随便填 |
 | Model | `gemini-3.5-flash-thinking` |
@@ -77,7 +77,7 @@ gemini
 ## 可用模型
 
 | 模型 | 说明 | 输出长度 |
-|------|------|----------|
+|-|-|-|
 | `gemini-3.7-flash` | 最新全能模型（Gemini 3.7 Flash） | ~12k 字符 |
 | `gemini-3.6-flash` | 全能模型 | ~12k 字符 |
 | `gemini-3.5-flash` | 3.6 Flash 的别名 | ~12k 字符 |

@@ -35,7 +35,7 @@ Server starts at `http://localhost:8081/v1`.
 ### Cherry Studio / ChatBox / any OpenAI client
 
 | Field | Value |
-|-------|-------|
+|-|-|
 | Base URL | `http://localhost:8081/v1` |
 | API Key | any `api_keys` value from `config.json`; anything if not configured |
 | Model | `gemini-3.5-flash-thinking` |
