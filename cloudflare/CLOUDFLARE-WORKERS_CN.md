@@ -85,9 +85,12 @@
      - 支持 GitHub raw 完整源备用回退
      - 内置自动测试系统：通过 cloudflare:sockets 真实测试目标 gemini.google.com:443 隧道连通性
      - 支持 HTTP CONNECT、SOCKS5、SOCKS4 代理协议，自动升级 TLS，支持打字机流式输出
+     - Smart Round Robin 智能轮询（默认轮询模式）：按反向延迟加权选择——最快代理获得最高选中概率，慢速代理仍保留一定流量以便持续验证可用性
+     - Isolate 级候选缓存：解析后的候选代理列表缓存在当前 Worker Isolate 内存中（免费，无 KV 费用），TTL 与更新周期一致，周期内重复刷新直接复用缓存、跳过 ProxyScrape 与 GitHub 两次上游请求；空结果不写入缓存
      - 每 24 小时自动静默刷新代理池（支持 Cloudflare Cron 定时触发与按需后台异步更新）
      - 支持 Cloudflare KV 持久化缓存（多实例共享已测试代理）
      - 自动故障转移：单代理请求失败自动轮换下一个，所有代理失效时自动回退直连，确保服务高可用
+     - 单代理握手测试默认超时 1000ms（可通过 PROXY_TEST_TIMEOUT_MS 调整）
  
 
 ## 部署说明:

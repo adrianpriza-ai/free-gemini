@@ -1,6 +1,7 @@
 # Gemini Web2API - Cloudflare Workers Complete Concurrent Safety Fix Version
   Multiple fingerprint rotation + Multiple cookie rotation + Typewriter effect + Random delay + ProxyScrape automatic proxy pool with 24h timed update
 
+[中文文档](cloudflare/CLOUDFLARE-WORKERS_CN.md)
 
 ## Project Description
 
@@ -84,9 +85,12 @@ Core feature list:
        - Supports GitHub raw full source as backup fallback
        - Built-in automatic testing system: through cloudflare:sockets truly test target gemini.google.com:443 tunnel connectivity
        - Supports HTTP CONNECT, SOCKS5, SOCKS4 proxy protocols, automatically upgrade TLS, supports typewriter streaming output
+       - Smart Round Robin (default rotation mode): inverse-latency weighted selection — the fastest verified proxy is most likely to be chosen, while slower proxies still receive occasional traffic so their availability is continuously re-validated
+       - In-memory candidate caching: the parsed proxy list is cached per Worker Isolate (free, no KV cost). TTL aligns with the update interval so repeated refresh attempts within one cycle skip both the ProxyScrape and GitHub raw fetches. Empty results are never cached
        - Automatically refresh proxy pool every 24 hours (supports Cloudflare Cron timed trigger & on-demand background asynchronous update)
        - Supports Cloudflare KV persistent caching (shared tested proxies across multiple instances)
        - Automatic failover: single proxy request failure automatically rotates to next, all proxies failure automatically falls back to direct connection, ensuring service high availability
+       - Default per-proxy handshake test timeout is 1000ms (configurable via PROXY_TEST_TIMEOUT_MS)
 
 
 ## Deployment Instructions:

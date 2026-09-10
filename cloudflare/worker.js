@@ -117,15 +117,19 @@ var DEFAULT_CONFIG = {
     // 自动测试代理开关（通过 cloudflare:sockets 握手验证可用性）
     autoTest: true,
     // 单个代理连接与握手测试超时（毫秒）
-    testTimeoutMs: 2000,
+    testTimeoutMs: 1000,
     // 代理池最大保留数量（避免占用过多 Worker 内存）
     maxPoolSize: 30,
     // 代理池更新间隔时间（小时，默认 24 小时）
     updateIntervalHours: 24,
     // 当所有代理不可用时是否自动降级回退到直连（确保业务高可用）
     fallbackDirect: true,
-    // 代理轮询方式：'round-robin'（轮询）或 'random'（随机）
-    rotationMode: 'round-robin',
+    // 代理轮询方式（PROXY_ROTATION_MODE 环境变量覆盖）：
+    //   'round-robin'  严格顺序轮询（公平，无质量感知）
+    //   'random'       纯均匀随机
+    //   'best-of-2'    二次幂选择：从池中抽 2 个，挑评分更高的（默认，自适应）
+    //   'weighted'     反向延迟加权轮盘赌（带探索底量，兼容旧 "Smart Round Robin"）
+    rotationMode: 'best-of-2',
   },
 };
 
@@ -639,7 +643,13 @@ function getRequestConfig(env, ctx) {
     config.proxy.fallbackDirect = String(env.PROXY_FALLBACK_DIRECT).toLowerCase() === 'true' || env.PROXY_FALLBACK_DIRECT === '1';
   }
   if (env.PROXY_ROTATION_MODE) {
-    config.proxy.rotationMode = env.PROXY_ROTATION_MODE.trim().toLowerCase();
+    var requestedMode = env.PROXY_ROTATION_MODE.trim().toLowerCase();
+    var validModes = { 'round-robin': 1, 'random': 1, 'best-of-2': 1, 'weighted': 1 };
+    if (validModes[requestedMode]) {
+      config.proxy.rotationMode = requestedMode;
+    } else {
+      log('PROXY_ROTATION_MODE=' + requestedMode + ' 不合法，已忽略（合法值: round-robin / random / best-of-2 / weighted），使用默认 ' + config.proxy.rotationMode, 'WARN', config);
+    }
   }
 
   // 附加环境与上下文引用，便于异步任务与 KV 访问
@@ -1071,6 +1081,8 @@ var globalProxyState = {
   lastUpdated: 0,         // 上次更新时间戳 (ms)
   isUpdating: false,      // 防并发刷新互斥锁
   currentIndex: 0,        // 轮询计数器
+  candidatesCache: null,  // 候选代理列表缓存 (Isolate 级,免费,避免重复打主/备源)
+  candidatesCacheTime: 0, // 候选缓存时间戳 (ms)
 };
 
 /**
@@ -1713,7 +1725,14 @@ async function fetchViaProxy(url, options, proxy, config) {
 /**
  * 获取候选代理列表（从源 URL 与静态配置中拉取）
  */
-async function fetchProxyCandidates(config) {
+async function fetchProxyCandidates(config, force) {
+  // Isolate 级候选缓存:在 updateInterval 周期内复用上次结果,避免反复打主/备源消耗 Worker 子请求配额
+  var cacheTtlMs = (config.proxy && config.proxy.updateIntervalHours ? config.proxy.updateIntervalHours : 24) * 3600 * 1000;
+  if (!force && globalProxyState.candidatesCache && (Date.now() - globalProxyState.candidatesCacheTime) < cacheTtlMs) {
+    log('复用代理候选缓存 (剩余 ' + Math.round((cacheTtlMs - (Date.now() - globalProxyState.candidatesCacheTime)) / 1000) + 's),size=' + globalProxyState.candidatesCache.length, 'INFO', config);
+    return globalProxyState.candidatesCache.slice();
+  }
+
   var proxies = [];
   var seen = new Set();
 
@@ -1777,6 +1796,12 @@ async function fetchProxyCandidates(config) {
     }
   }
 
+  // 仅当本次拉取到候选代理时才更新缓存,空结果不污染缓存(避免主源偶尔失败时锁定空池)
+  if (proxies.length > 0) {
+    globalProxyState.candidatesCache = proxies.slice();
+    globalProxyState.candidatesCacheTime = Date.now();
+  }
+
   return proxies;
 }
 
@@ -1818,7 +1843,7 @@ async function refreshProxyPool(config, env, ctx, force) {
     }
 
     log('正在获取并更新代理池...', 'INFO', config);
-    var candidates = await fetchProxyCandidates(config);
+    var candidates = await fetchProxyCandidates(config, force);
     log('共获取到 ' + candidates.length + ' 个候选代理', 'INFO', config);
 
     if (candidates.length === 0) {
@@ -1832,7 +1857,7 @@ async function refreshProxyPool(config, env, ctx, force) {
       var verified = [];
       var batchSize = 6;
       var maxPool = config.proxy.maxPoolSize || 30;
-      var testTimeout = config.proxy.testTimeoutMs || 2000;
+      var testTimeout = config.proxy.testTimeoutMs || 1000;
 
       // 限制测试候选数量，防止超量消耗 Worker 资源
       var toTest = candidates.slice(0, Math.min(candidates.length, maxPool * 2));
@@ -1947,16 +1972,69 @@ async function geminiFetch(url, options, config) {
 
   for (var i = 0; i < maxTries; i++) {
     var proxy;
-    if (config.proxy.rotationMode === 'random') {
-      proxy = usableProxies[Math.floor(Math.random() * usableProxies.length)];
+    var mode = config.proxy.rotationMode;
+    var n = usableProxies.length;
+
+    if (n === 0) {
+      break;
+    }
+
+    // 评分函数: reliability(失败冷却) × (1 / (延迟 + ε))
+    // - 延迟为 0/undefined 时回退到 1000ms,避免除零
+    // - 每次失败把可靠性折半,成功后重置,代理可恢复
+    var scoreOf = function (p) {
+      var lat = (typeof p.latency === 'number' && p.latency > 0) ? p.latency : 1000;
+      var fails = p.fails || 0;
+      var reliability = fails === 0 ? 1 : Math.pow(0.5, fails);
+      return reliability / (lat + 1);
+    };
+
+    if (mode === 'random') {
+      // 纯均匀随机 — 调试或对照基线
+      proxy = usableProxies[Math.floor(Math.random() * n)];
+    } else if (mode === 'round-robin') {
+      // 真正的顺序轮询,代理列表收缩时通过取模自适应
+      var ci = globalProxyState.currentIndex % n;
+      proxy = usableProxies[ci];
+      globalProxyState.currentIndex = (ci + 1) % n;
+    } else if (mode === 'weighted') {
+      // 反向延迟加权轮盘赌,带 10% 探索底量 (兼容旧 "Smart Round Robin")
+      // 探索底量保证最慢代理也会被周期性探活
+      var EXPLORE = 0.1;
+      var totalW = EXPLORE * n;
+      for (var s = 0; s < n; s++) totalW += scoreOf(usableProxies[s]);
+      var rw = Math.random() * totalW;
+      var cumW = 0;
+      var pickedW = n - 1;
+      for (var s2 = 0; s2 < n; s2++) {
+        cumW += scoreOf(usableProxies[s2]) + EXPLORE;
+        if (rw < cumW) { pickedW = s2; break; }
+      }
+      proxy = usableProxies[pickedW];
+      globalProxyState.currentIndex = (pickedW + 1) % n;
     } else {
-      proxy = usableProxies[globalProxyState.currentIndex % usableProxies.length];
-      globalProxyState.currentIndex++;
+      // 'best-of-2' (默认): 二次幂选择 — 抽 2 个不同的代理,选评分高的
+      // O(1),天然避免轮盘赌把流量集中到单代理,近乎最优
+      var a = Math.floor(Math.random() * n);
+      var b = Math.floor(Math.random() * n);
+      if (b === a) b = (a + 1) % n;
+      proxy = scoreOf(usableProxies[a]) >= scoreOf(usableProxies[b])
+        ? usableProxies[a]
+        : usableProxies[b];
+      globalProxyState.currentIndex = (usableProxies.indexOf(proxy) + 1) % n;
     }
 
     try {
       log('通过代理 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + '] 发送请求', 'INFO', config);
+      var t0 = Date.now();
       var resp = await fetchViaProxy(url, options, proxy, config);
+      // EWMA 延迟更新: α=0.3,新样本足以追踪变化,又不会被单次抖动主导
+      // 成功后清零失败计数,代理可完全恢复
+      var sample = Date.now() - t0;
+      proxy.latency = proxy.latency > 0
+        ? Math.round(proxy.latency * 0.7 + sample * 0.3)
+        : sample;
+      proxy.fails = 0;
       return resp;
     } catch (err) {
       log('代理请求失败 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + ']: ' + err.message, 'WARN', config);

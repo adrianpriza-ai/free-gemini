@@ -14,7 +14,7 @@ Gemini Web2API 是一个部署在 Cloudflare Workers 上的无服务器代理服
 - **多 Cookie 轮换**：支持配置多个 Google 账号 Cookie，随机选择使用
 - **并发安全**：请求级配置隔离，彻底消除高并发场景下的配置串扰
 - **工具调用支持**：兼容 OpenAI Function Calling 格式
-- **ProxyScrape 自动代理池**：自动拉取 ProxyScrape 免费代理（默认 <=200ms 低延迟 API 或 GitHub 完整源），支持通过 `cloudflare:sockets` 自动连通性测试（HTTP CONNECT、SOCKS5、SOCKS4），每 24 小时自动静默刷新（Cron 定时触发与请求后台更新），支持自动故障转移与直连兜底。
+- **ProxyScrape 自动代理池**：自动拉取 ProxyScrape 免费代理（默认 <=200ms 低延迟 API 或 GitHub 完整源），支持通过 `cloudflare:sockets` 自动连通性测试（HTTP CONNECT、SOCKS5、SOCKS4）。采用 **Smart Round Robin 智能轮询**（按反向延迟加权选择，最快代理获得最高选中概率，慢速代理仍周期性健康检测），每 24 小时自动静默刷新（Cron 定时触发与请求后台更新），内置 **Isolate 级候选缓存**（免费）避免重复打源，支持自动故障转移与直连兜底。
 
 ### 适用场景
 
@@ -169,11 +169,51 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 | `PROXY_FALLBACK_SOURCE_URL` | 备用代理源 URL（GitHub 完整源） | `https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt` |
 | `STATIC_PROXIES` / `PROXY_URL` | 自定义固定代理（逗号或换行分隔，如 `http://user:pass@ip:port`, `socks5://ip:port`） | 空 |
 | `AUTO_TEST_PROXY` | 加入代理池前自动进行连通性测试 | `true` |
-| `PROXY_TEST_TIMEOUT_MS` | 单个代理测试握手超时时间（毫秒） | `2000` |
+| `PROXY_TEST_TIMEOUT_MS` | 单个代理测试握手超时时间（毫秒） | `1000` |
 | `PROXY_UPDATE_INTERVAL_HOURS` | 代理池自动更新周期（小时） | `24` |
 | `PROXY_MAX_POOL_SIZE` | 代理池保留的最大可用代理数 | `30` |
 | `PROXY_FALLBACK_DIRECT` | 代理全部失效时是否自动降级回退到直连 | `true` |
-| `PROXY_ROTATION_MODE` | 代理选择算法（`round-robin` 轮询 或 `random` 随机） | `round-robin` |
+| `PROXY_ROTATION_MODE` | 代理选择算法 — 见下方 [代理轮询模式](#代理轮询模式) | `best-of-2` |
+
+#### 代理轮询模式
+
+通过 `PROXY_ROTATION_MODE` 环境变量指定代理选择算法。所有模式共用一套**自适应评分层**：每次成功请求会用 EWMA（α = 0.3）更新代理延迟，并把失败计数清零；代理变慢会在约 3 次请求后掉排名，恢复后也能自动回升。每次失败把 `fails` 加 1，使评分减半（指数冷却）；累计 2 次失败则从池中淘汰。
+
+| 模式 | 选路规则 | 开销 | 适用场景 |
+|---|---|---|---|
+| `best-of-2` *(默认)* | 随机抽 2 个不同代理，返回评分高的那个 | O(1) | **生产环境** — 接近最优的负载均衡，天然避免轮盘赌把流量集中到单代理 |
+| `round-robin` | 严格顺序遍历池，到尾回头 | O(1) | 想要绝对公平、不要质量信号 |
+| `random` | 纯均匀随机，忽略延迟与失败 | O(1) | 调试 / 对照基线 |
+| `weighted` | 反向延迟加权轮盘赌，带 10% 探索底量（最慢代理也会被周期性探活） | O(n) | 兼容旧版 "Smart Round Robin"；需要显式按概率分配流量时使用 |
+
+**评分公式**（`best-of-2` 与 `weighted` 共用）：
+
+```
+score = reliability / (latency + 1)
+reliability = 1           若 fails == 0
+            = 0.5 ^ fails  否则
+```
+
+- 延迟缺失或非正时回退到 1000ms，因此 `latency=0`（关闭预测试时）的旧 `1/0 = Infinity` 崩溃已修复。
+- `fails` 在首次成功时清零，代理一次成功即可完全恢复。
+
+**示例：**
+
+```bash
+# 默认：二次幂选择
+PROXY_ROTATION_MODE=best-of-2
+
+# 严格顺序轮询，忽略质量
+PROXY_ROTATION_MODE=round-robin
+
+# 纯随机，用于 A/B 测试
+PROXY_ROTATION_MODE=random
+
+# 旧版反向延迟加权
+PROXY_ROTATION_MODE=weighted
+```
+
+非法值会被忽略并输出 `WARN` 日志，Worker 继续使用默认值（`best-of-2`）。
 
 #### 24 小时更新运行原理：
 1. **Cloudflare Cron 定时任务（推荐）**：
@@ -187,6 +227,11 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
    - `GET /proxies`：查看当前代理池状态、存活代理列表、各节点延迟及下次更新时间。
    - `POST /proxies/refresh` 或 `GET /proxies/refresh`：强制立即重新拉取并测试代理池。
    - `GET /health`：健康检查响应中已包含代理运行状态。
+5. **Isolate 级候选缓存（免费）**：
+   - 解析后的候选代理列表会在 **当前 Worker Isolate 内存** 中缓存，TTL 与 `PROXY_UPDATE_INTERVAL_HOURS` 相同（默认 24 小时）。
+   - 在一个刷新周期内重复刷新会直接复用缓存，完全跳过 ProxyScrape 与 GitHub raw 两次上游请求。
+   - 手动调用 `/proxies/refresh` 时会强制绕过缓存（`force=true`），始终重新拉取。
+   - 拉取结果为空时不会写入缓存，避免主源偶发失败时锁定空池。
 
 ---
 
@@ -322,6 +367,7 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 | 版本 | 日期 | 更新内容 |
 |-|-|-|
 | 1.7.0 | 2026-09-10 | 新增 ProxyScrape 免费代理池自动抓取（默认 <=200ms API 与 GitHub 完整源）、基于 cloudflare:sockets 的代理连通性真实测试系统（HTTP CONNECT、SOCKS5、SOCKS4）、24 小时定时更新与 Cron 触发器支持（`0 0 * * *`）、故障自动轮换与直连降级兜底、新增 `/proxies` 与 `/proxies/refresh` 管理端点 |
+| 1.7.1 | 2026-09-10 | 代理选择切换为 **Smart Round Robin 智能轮询**（按反向延迟加权）；`PROXY_TEST_TIMEOUT_MS` 默认值由 2000 调优为 1000；新增 Isolate 级候选代理缓存（TTL = 更新周期）避免重复打源 |
 | 1.6.0 | 2026-09-09 | 升级至 Chrome 132-134 指纹库、流式请求 429 自动指数退避重试、支持灵活的环境变量 `API_KEY`（字符串/逗号分隔/JSON）、新增 `gemini-3.7-flash` 及 2.0/2.5 兼容别名、健康检查返回详细状态 |
 | 1.5.0 | 2026-07-31 | 新增多指纹轮换、多Cookie轮换、随机延迟机制 |
 | 1.4.0 | 2026-07-30 | 修复并发串扰、速率限制内存安全 |

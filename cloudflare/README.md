@@ -16,7 +16,7 @@ Gemini Web2API is a serverless proxy service deployed on Cloudflare Workers that
 - **Multi-Cookie rotation**: Supports configuring multiple Google account cookies, randomly selected for use
 - **Concurrent safety**: Request-level configuration isolation, completely eliminating configuration crosstalk in high-concurrency scenarios
 - **Tool call support**: Compatible with OpenAI Function Calling format
-- **ProxyScrape Auto Proxy Rotation**: Automatically fetches free proxies from ProxyScrape (timeout <= 200ms API or GitHub raw), auto-tests connectivity against `gemini.google.com:443`, supports HTTP/SOCKS4/SOCKS5 via `cloudflare:sockets`, and updates every 24 hours (Cron Trigger + auto background refresh) with seamless direct fallback.
+- **ProxyScrape Auto Proxy Rotation**: Automatically fetches free proxies from ProxyScrape (timeout <= 200ms API or GitHub raw), auto-tests connectivity against `gemini.google.com:443`, supports HTTP/SOCKS4/SOCKS5 via `cloudflare:sockets`. Uses **Smart Round Robin** (inverse-latency weighted selection) so the fastest verified proxy wins most requests while slower ones still get periodic health checks, updates every 24 hours (Cron Trigger + auto background refresh), features **in-memory candidate caching** to avoid redundant upstream fetches, and seamlessly falls back to direct connection.
 
 ### Applicable Scenarios
 
@@ -171,11 +171,51 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 | `PROXY_FALLBACK_SOURCE_URL` | Fallback proxy source URL (GitHub raw full list) | `https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt` |
 | `STATIC_PROXIES` / `PROXY_URL` | Custom fixed proxies (comma/newline separated, e.g. `http://user:pass@ip:port`, `socks5://ip:port`) | (empty) |
 | `AUTO_TEST_PROXY` | Auto-test proxies before adding to verified pool | `true` |
-| `PROXY_TEST_TIMEOUT_MS` | Per-proxy connection test timeout (ms) | `2000` |
+| `PROXY_TEST_TIMEOUT_MS` | Per-proxy connection test timeout (ms) | `1000` |
 | `PROXY_UPDATE_INTERVAL_HOURS` | Proxy pool auto-update interval (hours) | `24` |
 | `PROXY_MAX_POOL_SIZE` | Maximum verified proxies to keep in pool | `30` |
 | `PROXY_FALLBACK_DIRECT` | Fall back to direct connection if all proxies fail | `true` |
-| `PROXY_ROTATION_MODE` | Proxy selection algorithm (`round-robin` or `random`) | `round-robin` |
+| `PROXY_ROTATION_MODE` | Proxy selection algorithm — see [Proxy Rotation Modes](#proxy-rotation-modes) below | `best-of-2` |
+
+#### Proxy Rotation Modes
+
+Set `PROXY_ROTATION_MODE` to one of four values to control how the next proxy is chosen for each request. All modes share the same **adaptive scoring layer**: every successful request updates the proxy's latency with an EWMA (α = 0.3) and resets its fail counter, so a proxy that just slowed down drops in rank within ~3 requests, and a recovered one climbs back. Every failed request increments `fails`, which halves that proxy's score (exponential cooldown), and any proxy that hits 2 cumulative fails is evicted from the pool.
+
+| Mode | Selection rule | Cost | Best for |
+|---|---|---|---|
+| `best-of-2` *(default)* | Pick 2 distinct proxies at random, return the one with the higher score | O(1) | **Production** — near-optimal load balancing, naturally avoids the heavy-weight concentration of pure roulette |
+| `round-robin` | Strict sequential walk through the pool, wrap around at the end | O(1) | Want perfect fairness, no quality signal |
+| `random` | Pure uniform random, ignores latency and fails | O(1) | Debugging / baseline comparison |
+| `weighted` | Inverse-latency roulette with a 10% exploration floor so the slowest proxy still gets probed | O(n) | Compatible with the legacy "Smart Round Robin" — use if you need explicit probability distribution over all proxies |
+
+**Score formula** (used by `best-of-2` and `weighted`):
+
+```
+score = reliability / (latency + 1)
+reliability = 1           if fails == 0
+            = 0.5 ^ fails  otherwise
+```
+
+- Latency defaults to 1000 ms if missing or non-positive, so the `latency=0` path (pretest disabled) no longer collapses to `1/0 = Infinity`.
+- `fails` resets to 0 on the first successful request, so a proxy recovers fully after one good call.
+
+**Examples:**
+
+```bash
+# Default — power-of-two choices
+PROXY_ROTATION_MODE=best-of-2
+
+# Strict sequential, ignore quality
+PROXY_ROTATION_MODE=round-robin
+
+# Pure random, for A/B testing
+PROXY_ROTATION_MODE=random
+
+# Legacy inverse-latency weighted
+PROXY_ROTATION_MODE=weighted
+```
+
+Invalid values are ignored and logged as a `WARN`; the worker keeps the default (`best-of-2`).
 
 #### How the 24-Hour Update Works:
 1. **Cloudflare Cron Trigger (Recommended)**:
@@ -189,6 +229,11 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
    - `GET /proxies`: View proxy pool status, active proxy count, latencies, and last/next update times.
    - `POST /proxies/refresh` or `GET /proxies/refresh`: Force an immediate re-fetch and test of the proxy pool.
    - `GET /health`: Includes live proxy status in the health check JSON.
+5. **In-Memory Candidate Caching (Free)**:
+   - After fetching from the primary/fallback source, the parsed candidate list is cached **per Worker Isolate** (free, no KV cost).
+   - TTL equals `PROXY_UPDATE_INTERVAL_HOURS` (24h default). Within one cycle, refresh attempts reuse the cache and skip both the ProxyScrape and GitHub raw fetches.
+   - Manual `/proxies/refresh` calls bypass the cache (`force=true`) and always re-fetch.
+   - Empty results never poison the cache, so a transient primary failure won't lock the pool.
 
 ---
 
@@ -324,6 +369,7 @@ Supports overriding thinking mode via `@think=` parameter:
 | Version | Date | Update Content |
 |-|-|-|
 | 1.7.0 | 2026-09-10 | Added ProxyScrape auto proxy fetching (timeout <= 200ms API or GitHub raw), auto connectivity test system via cloudflare:sockets (HTTP CONNECT, SOCKS5, SOCKS4), 24-hour automatic background update & Cron Trigger support (`0 0 * * *`), automatic failover & fallback to direct connection, `/proxies` and `/proxies/refresh` management endpoints |
+| 1.7.1 | 2026-09-10 | Switched proxy rotation to **Smart Round Robin** (inverse-latency weighted), reduced default `PROXY_TEST_TIMEOUT_MS` from 2000 to 1000, added free in-memory candidate cache (TTL = update interval) to avoid redundant upstream fetches |
 | 1.6.0 | 2026-09-09 | Upgraded to Chrome 132-134 fingerprint library, streaming request 429 automatic exponential backoff retry, support flexible environment variable `API_KEY` (string/comma-separated/JSON), added `gemini-3.7-flash` and 2.0/2.5 compatibility aliases, health check returns detailed status |
 | 1.5.0 | 2026-07-31 | Added multi-fingerprint rotation, multi-Cookie rotation, random delay mechanism |
 | 1.4.0 | 2026-07-30 | Fixed concurrent crosstalk, rate limiting memory safety |
