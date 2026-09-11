@@ -9,7 +9,7 @@
 将 Google Gemini 网页端转换为 OpenAI 兼容 API. 零成本, 跨平台, 单文件.
 
 > ☁️ **想要无服务器部署?** 可将同样的 API 免费部署到边缘计算平台，无需维护服务器：
-> - **Netlify**：一键部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](NETLIFY_CN.md)  
+> - **Netlify**：一键部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](netlify/NETLIFY_CN.md)  
 >   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
 > - **Cloudflare**：部署到 Cloudflare Workers — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP.md) 或 [完整部署文档](cloudflare/README_CN.md)
 
@@ -47,12 +47,22 @@ python gemini_web2api.py
 
 ### curl
 
+#### bash / macOS / Linux
+
 ```bash
 curl http://localhost:8081/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-your-key" \
   -d '{"model":"gemini-3.5-flash","messages":[{"role":"user","content":"你好!"}]}'
 ```
+
+#### PowerShell (Windows)
+
+```powershell
+curl.exe --% http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer sk-your-key" -d "{\"model\":\"gemini-3.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好!\"}]}"
+```
+
+> 注意: Windows PowerShell 下请使用 `curl.exe` 和 `--%`，避免 PowerShell 重新解析 JSON 引号和 curl 参数。
 
 ### OpenAI Python SDK
 
@@ -222,11 +232,28 @@ python gemini_web2api.py --proxy http://127.0.0.1:7890
 
 **方式 3: 环境变量** (自动检测)
 ```bash
-set HTTPS_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:7890
 python gemini_web2api.py
 ```
 
 支持 Clash, V2Ray, Shadowsocks 等任何 HTTP 代理.
+
+## 工具调用
+
+```python
+resp = client.chat.completions.create(
+    model="gemini-3.5-flash",
+    messages=[{"role": "user", "content": "东京现在天气如何？"}],
+    tools=[{
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "查询某个城市的天气",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+        }
+    }]
+)
+```
 
 ## 图片输入
 
@@ -267,6 +294,7 @@ resp = client.chat.completions.create(
 
 - [linux.do](https://linux.do) 社区
 - 开源 API 代理生态
+- 本项目的开发 Agent 能力由 [GenericAgent](https://github.com/lsdefine/GenericAgent) 提供
 
 ## License
 

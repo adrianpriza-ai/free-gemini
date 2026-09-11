@@ -18,7 +18,7 @@ Gemini Web2API 是一个部署在 Cloudflare Workers 上的无服务器代理服
 - **多 Cookie 轮换**：支持配置多个 Google 账号 Cookie，随机选择使用
 - **并发安全**：请求级配置隔离，彻底消除高并发场景下的配置串扰
 - **工具调用支持**：兼容 OpenAI Function Calling 格式
-- **ProxyScrape 自动代理池**：自动拉取 ProxyScrape 免费代理（默认 <=200ms 低延迟 API 或 GitHub 完整源），支持通过 `cloudflare:sockets` 自动连通性测试（HTTP CONNECT、SOCKS5、SOCKS4）。采用 **Smart Round Robin 智能轮询**（按反向延迟加权选择，最快代理获得最高选中概率，慢速代理仍周期性健康检测），每 24 小时自动静默刷新（Cron 定时触发与请求后台更新），内置 **Isolate 级候选缓存**（免费）避免重复打源，支持自动故障转移与直连兜底。
+- **ProxyScrape 自动代理池**：自动拉取 ProxyScrape 免费代理（默认 <=200ms 低延迟 API 或 GitHub 完整源），支持通过 `cloudflare:sockets` 自动连通性测试（HTTP CONNECT、SOCKS5、SOCKS4）。采用 **best-of-2 评分选路**，最快代理获得最高选中概率，慢速代理仍周期性健康检测；每 24 小时自动静默刷新（Cron 定时触发与请求后台更新），候选列表按 Isolate 内存缓存（免费）避免重复打源，失败时自动故障转移并直连兜底。
 
 ### 适用场景
 
@@ -69,7 +69,7 @@ https://你的worker.workers.dev/health
 ```json
 {
   "status": "ok",
-  "version": "1.5.0-cf-multifingerprint",
+  "version": "1.7.3-cf-autoproxy",
   "platform": "Cloudflare Workers",
   "models": ["gemini-3.6-flash", "gemini-3.5-flash", "..."],
   "hasCookie": false,
@@ -229,10 +229,11 @@ PROXY_ROTATION_MODE=weighted
    - 为 Worker 绑定名为 `PROXY_KV` 的 KV 命名空间，测速通过的代理池将持久化保存，并在全球各边缘节点间共享，降低冷启动开销。
    - **这是让 Cron 定时任务真正生效的关键**：每日 Cron 刷新在独立调用中运行（拥有独立子请求预算），完成测速后把验证结果写入 KV —— 各隔离实例上的用户请求可直接从 KV 加载热池，无需再付出冷启动测试成本。
    - 配置方法：执行 `npx wrangler kv namespace create PROXY_KV`，然后把返回的命名空间 `id` 填入 `wrangler.jsonc` 的 `kv_namespaces` 块（已有占位符）。
-   - 不绑定 KV 时，Cron 刷新只能温暖 Cron 自身的临时隔离实例；各用户请求隔离实例仍需各自执行冷启动刷新。 4. **管理端点**（均需要有效的 API 密钥 —— 与 `/v1` 端点相同的认证方式）：
+   - 不绑定 KV 时，Cron 刷新只能温暖 Cron 自身的临时隔离实例；各用户请求隔离实例仍需各自执行冷启动刷新。
+4. **管理端点**（均需要有效的 API 密钥 —— 与 `/v1` 端点相同的认证方式）：
     - `GET /proxies`：查看当前代理池状态、存活代理列表、各节点延迟及下次更新时间。
     - `POST /proxies/refresh` 或 `GET /proxies/refresh`：强制立即重新拉取并测试代理池。
-    - `GET /debug/proxies`：代理池详细诊断 —— 每个代理的健康状态（`healthy`/`flaky`）、延迟、失败计数、轮换评分（按评分降序排列）及内部状态（候选缓存、是否到期刷新、轮换模式）。需要有效的 API 密钥（与 `/v1` 端点相同的认证方式）。
+    - `GET /debug/proxies`：代理池详细诊断 —— 每个代理的健康状态（`healthy`/`flaky`）、延迟、失败计数、轮换评分（按评分降序排列）及内部状态（候选缓存、是否到期刷新、轮换模式）。
     - `GET /health`：健康检查响应中已包含代理运行状态。
 5. **Isolate 级候选缓存（免费）**：
    - 解析后的候选代理列表会在 **当前 Worker Isolate 内存** 中缓存，TTL 与 `PROXY_UPDATE_INTERVAL_HOURS` 相同（默认 24 小时）。
@@ -247,10 +248,7 @@ PROXY_ROTATION_MODE=weighted
 
 ### 为什么需要 Cookie？
 
-匿名请求容易被 Gemini 限流（返回 HTTP 429 错误）。配置有效的 Cookie 可以：
-- 大幅降低被限流的概率
-- 提升 Pro 模型的路由质量
-- 获得更稳定的服务体验
+匿名请求很快就会撞上 Gemini 的限流（HTTP 429）。配置有效的 Cookie 可以降低被限流的概率，并改善 Pro 模型的路由。
 
 ### 获取步骤
 

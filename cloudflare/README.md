@@ -6,7 +6,7 @@
 
 ## 📖 Project Introduction
 
-Gemini Web2API is a serverless proxy service deployed on Cloudflare Workers that converts the Google Gemini web interface into an OpenAI-compatible API interface. No server required, no API Key needed (optional), ready to use out of the box.
+Gemini Web2API runs on Cloudflare Workers and turns the Gemini web interface into an OpenAI-compatible API. No server, no required API key, works out of the box.
 
 ### Core Features
 
@@ -18,7 +18,7 @@ Gemini Web2API is a serverless proxy service deployed on Cloudflare Workers that
 - **Multi-Cookie rotation**: Supports configuring multiple Google account cookies, randomly selected for use
 - **Concurrent safety**: Request-level configuration isolation, completely eliminating configuration crosstalk in high-concurrency scenarios
 - **Tool call support**: Compatible with OpenAI Function Calling format
-- **ProxyScrape Auto Proxy Rotation**: Automatically fetches free proxies from ProxyScrape (timeout <= 200ms API or GitHub raw), auto-tests connectivity against `gemini.google.com:443`, supports HTTP/SOCKS4/SOCKS5 via `cloudflare:sockets`. Uses **Smart Round Robin** (inverse-latency weighted selection) so the fastest verified proxy wins most requests while slower ones still get periodic health checks, updates every 24 hours (Cron Trigger + auto background refresh), features **in-memory candidate caching** to avoid redundant upstream fetches, and seamlessly falls back to direct connection.
+- **ProxyScrape Auto Proxy Rotation**: Automatically fetches free proxies from ProxyScrape (timeout <= 200ms API or GitHub raw), auto-tests connectivity against `gemini.google.com:443`, supports HTTP/SOCKS4/SOCKS5 via `cloudflare:sockets`. Uses **best-of-2 scoring** so the fastest verified proxy wins most requests while slower ones still get periodic health checks. The pool updates every 24 hours (Cron Trigger + background refresh), candidate lists are cached in memory to avoid redundant upstream fetches, and everything falls back to a direct connection on failure.
 
 ### Applicable Scenarios
 
@@ -69,7 +69,7 @@ If you see a JSON response similar to the following, deployment is successful:
 ```json
 {
   "status": "ok",
-  "version": "1.5.0-cf-multifingerprint",
+  "version": "1.7.3-cf-autoproxy",
   "platform": "Cloudflare Workers",
   "models": ["gemini-3.6-flash", "gemini-3.5-flash", "..."],
   "hasCookie": false,
@@ -229,10 +229,11 @@ Invalid values are ignored and logged as a `WARN`; the worker keeps the default 
    - Bind a KV namespace named `PROXY_KV` to your Worker. Verified proxies will be cached in KV across all edge data center instances!
    - **This is what makes the Cron Trigger effective**: the daily cron refresh runs in its own invocation with its own subrequest budget, tests the pool, and writes the verified result to KV — so user requests on any isolate load the warm pool from KV instead of paying the cold-start test cost.
    - Setup: `npx wrangler kv namespace create PROXY_KV`, then paste the returned namespace `id` into the `kv_namespaces` block of `wrangler.jsonc` (a placeholder is already there).
-   - Without KV, the cron refresh only warms the cron's own throwaway isolate; each user-facing isolate still does its own cold-start refresh. 4. **Proxy Endpoints** (all require a valid API key — same auth as `/v1` endpoints):
+   - Without KV, the cron refresh only warms the cron's own throwaway isolate; each user-facing isolate still does its own cold-start refresh.
+4. **Proxy Endpoints** (all require a valid API key, same auth as `/v1` endpoints):
     - `GET /proxies`: View proxy pool status, active proxy count, latencies, and last/next update times.
     - `POST /proxies/refresh` or `GET /proxies/refresh`: Force an immediate re-fetch and test of the proxy pool.
-    - `GET /debug/proxies`: Detailed pool diagnostics — per-proxy health (`healthy`/`flaky`), latency, fail counts, rotation scores (highest first), and internal state (candidate cache, refresh due, rotation mode). Requires a valid API key (same auth as `/v1` endpoints).
+    - `GET /debug/proxies`: Detailed pool diagnostics — per-proxy health (`healthy`/`flaky`), latency, fail counts, rotation scores (highest first), and internal state (candidate cache, refresh due, rotation mode).
     - `GET /health`: Includes live proxy status in the health check JSON.
 5. **In-Memory Candidate Caching (Free)**:
    - After fetching from the primary/fallback source, the parsed candidate list is cached **per Worker Isolate** (free, no KV cost).
@@ -247,10 +248,7 @@ Invalid values are ignored and logged as a `WARN`; the worker keeps the default 
 
 ### Why Do You Need Cookie?
 
-Anonymous requests are easily rate-limited by Gemini (returning HTTP 429 error). Configuring valid Cookie can:
-- Significantly reduce the probability of being rate-limited
-- Improve Pro model routing quality
-- Obtain a more stable service experience
+Anonymous requests hit Gemini's rate limits quickly (HTTP 429). A valid cookie lowers that risk and improves Pro model routing.
 
 ### Obtaining Steps
 

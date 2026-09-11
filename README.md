@@ -9,7 +9,7 @@
 Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, cross-platform, single file.
 
 > ☁️ **Prefer serverless?** Deploy the same API for free with zero server maintenance:
-> - **Netlify**: Deploy to Netlify Edge Functions with 1-click — see [Netlify Deployment Docs](NETLIFY.md)  
+> - **Netlify**: Deploy to Netlify Edge Functions with 1-click — see [Netlify Deployment Docs](netlify/NETLIFY.md)  
 >   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
 > - **Cloudflare**: Deploy to Cloudflare Workers — see [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or [Full Cloudflare Docs](cloudflare/README.md)
 
@@ -294,19 +294,8 @@ The model selection is controlled by field `[79]` in the request payload, mapped
 
 ## Acknowledgments
 
-- Inspired by the open-source API proxy ecosystem
+The development agent capabilities of this project are provided by [GenericAgent](https://github.com/lsdefine/GenericAgent).
 
 ## License
 
 MIT
-
----
-
-## Acknowledgments
-
-The development agent capabilities of this project are provided by [GenericAgent](https://github.com/lsdefine/GenericAgent).
-
-### 🚩 Friendly Links
-
-[![GenericAgent](https://img.shields.io/badge/Agent_Framework-GenericAgent-orange?style=for-the-badge&logo=github)](https://github.com/lsdefine/GenericAgent)
-[![LinuxDo](https://img.shields.io/badge/Community-LinuxDo-blue?style=for-the-badge)](https://linux.do/)
