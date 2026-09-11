@@ -1,15 +1,18 @@
 {
-  "$schema": "https://developers.cloudflare.com/workers/wrangler/config-schema.json",
-  "name": "free-gemini",
-  "main": "./cloudflare/worker.js",
-  "compatibility_date": "2026-09-06",
-  "triggers": {
-    "crons": ["0 0 * * *"]
-  },
-  "kv_namespaces": [
-    {
-      "binding": "PROXY_KV",
-      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
-    }
-  ]
+	"$schema": "https://developers.cloudflare.com/workers/wrangler/config-schema.json",
+	"name": "free-gemini",
+	"main": "./cloudflare/worker.js",
+	"compatibility_date": "2026-09-06",
+	"triggers": {
+		"crons": [
+			"0 0 * * *"
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "PROXY_KV",
+			"id": "d2c4db4415244b218ca34654ae1b9d04",
+			"remote": true
+		}
+	]
 }
