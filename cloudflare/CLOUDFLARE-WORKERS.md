@@ -157,4 +157,4 @@ Client Configuration:
    Using CONFIG.X = env.X || null ensures explicit assignment every time.
   
   Based on gemini-web2api v1.1.0 port
-  Original author project: https://github.com/your-repo/gemini-web2api
+  Original author project: https://github.com/Sophomoresty/gemini-web2api

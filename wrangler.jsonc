@@ -11,7 +11,7 @@
 	"kv_namespaces": [
 		{
 			"binding": "PROXY_KV",
-			"id": "d2c4db4415244b218ca34654ae1b9d04",
+			"id": "d2c4db4415244b218ca34654ae1b9d04", // Replace with your own KV namespace ID
 			"remote": true
 		}
 	]

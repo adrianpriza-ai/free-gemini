@@ -184,7 +184,7 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 Set `PROXY_ROTATION_MODE` to one of four values to control how the next proxy is chosen for each request. All modes share the same **adaptive scoring layer**: every successful request updates the proxy's latency with an EWMA (α = 0.3) and resets its fail counter, so a proxy that just slowed down drops in rank within ~3 requests, and a recovered one climbs back. Every failed request increments `fails`, which halves that proxy's score (exponential cooldown), and any proxy that hits 2 cumulative fails is evicted from the pool.
 
 | Mode | Selection rule | Cost | Best for |
-|---|---|---|---|
+|-|-|-|-|
 | `best-of-2` *(default)* | Pick 2 distinct proxies at random, return the one with the higher score | O(1) | **Production** — near-optimal load balancing, naturally avoids the heavy-weight concentration of pure roulette |
 | `round-robin` | Strict sequential walk through the pool, wrap around at the end | O(1) | Want perfect fairness, no quality signal |
 | `random` | Pure uniform random, ignores latency and fails | O(1) | Debugging / baseline comparison |
