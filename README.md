@@ -8,7 +8,10 @@
 
 Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, cross-platform, single file.
 
-> ☁️ **Prefer serverless?** Deploy the same API to Cloudflare Workers (free, no server to run) — see the [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or the full [Cloudflare deployment docs](cloudflare/README.md).
+> ☁️ **Prefer serverless?** Deploy the same API for free with zero server maintenance:
+> - **Netlify**: Deploy to Netlify Edge Functions with 1-click — see [Netlify Deployment Docs](NETLIFY.md)  
+>   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
+> - **Cloudflare**: Deploy to Cloudflare Workers — see [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or [Full Cloudflare Docs](cloudflare/README.md)
 
 ## Features
 

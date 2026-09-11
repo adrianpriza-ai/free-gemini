@@ -8,7 +8,10 @@
 
 将 Google Gemini 网页端转换为 OpenAI 兼容 API. 零成本, 跨平台, 单文件.
 
-> ☁️ **想要无服务器部署?** 可将同样的 API 部署到 Cloudflare Workers (免费, 无需自己的服务器) — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP.md) 或 [完整部署文档](cloudflare/README_CN.md).
+> ☁️ **想要无服务器部署?** 可将同样的 API 免费部署到边缘计算平台，无需维护服务器：
+> - **Netlify**：一键部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](NETLIFY_CN.md)  
+>   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
+> - **Cloudflare**：部署到 Cloudflare Workers — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP.md) 或 [完整部署文档](cloudflare/README_CN.md)
 
 ## 特性
 

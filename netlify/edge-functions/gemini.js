@@ -1,4 +1,6 @@
-import { connect } from 'cloudflare:sockets';
+// Netlify Edge Functions runtime environment
+// connect is null on Netlify; Netlify Edge uses direct global fetch to gemini.google.com
+var connect = null;
 
 // 🔒 默认配置 - 仅作为只读模板
 //
@@ -104,10 +106,10 @@ var DEFAULT_CONFIG = {
   // 配合 User-Agent 轮换使用效果更佳
   fingerprintJitterMs: 1500,
 
-  // -- 代理池自动获取与测试配置
+  // -- 代理池配置（Netlify 支持直连，默认使用直连）
   proxy: {
-    // 是否启用代理池（默认开启）
-    enabled: true,
+    // 是否启用代理池（Netlify 边缘网络支持直连 gemini.google.com，默认关闭代理池走直连）
+    enabled: false,
     // 代理源 URL（默认使用 ProxyScrape 200ms timeout API，体积小、速度快、质量高）
     sourceUrl: 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text&timeout=200',
     // 备用源（GitHub raw 完整源）
@@ -432,6 +434,21 @@ var MODELS = {
  * @returns {Object} 专属于当前请求的配置副本
  */
 function getRequestConfig(env, ctx) {
+  // 自动从多种运行环境提取环境变量（兼容 Netlify Edge, Netlify Functions, Cloudflare, Node.js 等）
+  var mergedEnv = {};
+  if (typeof Netlify !== 'undefined' && Netlify.env && typeof Netlify.env.toObject === 'function') {
+    try { Object.assign(mergedEnv, Netlify.env.toObject()); } catch (e) {}
+  } else if (typeof Deno !== 'undefined' && Deno.env && typeof Deno.env.toObject === 'function') {
+    try { Object.assign(mergedEnv, Deno.env.toObject()); } catch (e) {}
+  }
+  if (typeof process !== 'undefined' && process.env) {
+    try { Object.assign(mergedEnv, process.env); } catch (e) {}
+  }
+  if (env && typeof env === 'object') {
+    Object.assign(mergedEnv, env);
+  }
+  env = mergedEnv;
+
   // 从默认模板创建全新的配置对象
   // 逐字段手动拷贝，确保每个字段都是独立的基本类型副本
   // 不使用展开运算符 (...DEFAULT_CONFIG)，避免引用共享问题
@@ -1644,6 +1661,9 @@ function createRawDecoderStream(initialBuffer, rawReader, contentLength, watchdo
  * @returns {Promise<{ok: boolean, latency?: number, error?: string}>}
  */
 async function testProxy(proxy, timeoutMs) {
+  if (!connect) {
+    return { ok: false, error: 'Raw TCP sockets not supported on this platform' };
+  }
   timeoutMs = timeoutMs || 2000;
   var socket = null;
   var startTime = Date.now();
@@ -1696,6 +1716,9 @@ async function testProxy(proxy, timeoutMs) {
  * @returns {Promise<Response>} HTTP 响应对象
  */
 async function fetchViaProxy(url, options, proxy, config) {
+  if (!connect) {
+    throw new Error('Raw TCP sockets not supported on this platform');
+  }
   var socket = null;
   var timer = null;
   var timeoutMs = (config.requestTimeoutSec || 28) * 1000;
@@ -2089,8 +2112,8 @@ async function ensureProxyReady(config) {
  * @returns {Promise<Response>}
  */
 async function geminiFetch(url, options, config) {
-  // 未开启代理时，直接使用标准直连 fetch
-  if (!config.proxy || !config.proxy.enabled) {
+  // 未开启代理或当前平台不支持 TCP Sockets 时，直接使用标准直连 fetch
+  if (!config.proxy || !config.proxy.enabled || !connect) {
     trackSubrequest(config, 'main');
     return fetch(url, options);
   }
@@ -3637,116 +3660,90 @@ async function handleGoogleAPI(request, body, stream, config) {
   }
 }
 
-// 🚀 主入口 - Cloudflare Workers fetch 事件处理器
+// 🚀 主入口 - 支持 Netlify Edge Functions、Netlify Functions 与 Cloudflare Workers
 
-export default {
-  /**
-   * Cloudflare Workers 的核心入口函数
-   * 
-   * 每个到达 Worker 的 HTTP 请求都会调用此函数。
-   * 处理流程严格按照以下顺序:
-   * 
-   * 1. OPTIONS 预检 → 返回 CORS 头（浏览器跨域必须）
-   * 2. 创建请求级配置 → getRequestConfig(env)（解决并发串扰）
-   * 3. 速率限制检查 → checkRateLimit()（防滥用）
-   * 4. API 密钥验证 → checkApiKey()（安全认证）
-   * 5. 路由分发:
-   *    GET  /health              → 健康检查
-   *    GET  /v1/models           → 模型列表（OpenAI 格式）
-   *    GET  /v1beta/models       → 模型列表（Google 格式）
-   *    POST /v1/chat/completions → 聊天补全（OpenAI 格式）
-   *    POST /v1/responses        → Responses API（Codex CLI）
-   *    POST ...:generateContent  → 生成内容（Google 格式）
-   *    POST /v1/*                → 万能兜底（自动转为 chat）
-   * 
-   * @param {Request} request - HTTP 请求对象
-   * @param {Object} env - 环境变量（每个请求由 CF 平台独立注入）
-   * @param {Object} ctx - 执行上下文
-   * @returns {Promise<Response>} HTTP 响应对象
-   */
-  async fetch(request, env, ctx) {
+async function handleRequest(request, envOrContext, ctx) {
 
-    // 第一步：OPTIONS CORS 预检请求优先处理
-    //
-    // 浏览器在发送跨域 POST 请求前会先发送 OPTIONS 预检请求。
-    // 必须返回正确的 CORS 头，否则浏览器会阻止实际请求。
-    // 这个处理必须在所有其他逻辑之前完成。
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        status: 204,  // No Content
-        headers: {
-          'Access-Control-Allow-Origin': '*',              // 允许所有域访问
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',  // 允许的 HTTP 方法
-          'Access-Control-Allow-Headers': '*',             // 允许所有自定义请求头
-          'Access-Control-Max-Age': '86400',               // 预检结果缓存 24 小时（秒）
+  // 第一步：OPTIONS CORS 预检请求优先处理
+  //
+  // 浏览器在发送跨域 POST 请求前会先发送 OPTIONS 预检请求。
+  // 必须返回正确的 CORS 头，否则浏览器会阻止实际请求。
+  // 这个处理必须在所有其他逻辑之前完成。
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,  // No Content
+      headers: {
+        'Access-Control-Allow-Origin': '*',              // 允许所有域访问
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',  // 允许的 HTTP 方法
+        'Access-Control-Allow-Headers': '*',             // 允许所有自定义请求头
+        'Access-Control-Max-Age': '86400',               // 预检结果缓存 24 小时（秒）
+      },
+    });
+  }
+
+  // 第二步：为当前请求创建独立的配置副本
+  // 兼容 Netlify (context) 和 Cloudflare (env, ctx)
+  var env = (envOrContext && !envOrContext.geo && !envOrContext.next && typeof envOrContext === 'object') ? envOrContext : null;
+  var execCtx = ctx || (envOrContext && typeof envOrContext.waitUntil === 'function' ? envOrContext : null);
+  var config = getRequestConfig(env, execCtx);
+
+  // 解析请求 URL 和方法
+  var requestUrl = new URL(request.url);
+  var path = requestUrl.pathname;
+  var method = request.method;
+
+  // 第三步：速率限制检查（支持 Cloudflare、Netlify 及标准代理头）
+  var clientIP = request.headers.get('CF-Connecting-IP') ||
+                 request.headers.get('x-nf-client-connection-ip') ||
+                 request.headers.get('client-ip') ||
+                 (envOrContext && envOrContext.ip) ||
+                 (request.headers.get('x-forwarded-for') ? request.headers.get('x-forwarded-for').split(',')[0].trim() : '0.0.0.0');
+  if (!checkRateLimit(clientIP, config)) {
+    log('Rate limit exceeded: ' + clientIP, 'WARN', config);
+    return sendJSON({
+      error: {
+        message: '请求过于频繁，请稍后再试',
+        type: 'rate_limit_exceeded',
+      },
+    }, 429);  // HTTP 429 Too Many Requests
+  }
+
+  // 第四步：API 密钥验证
+  var needsApiKey = path.indexOf('/v1') === 0 || path.indexOf('/debug') === 0 || path.indexOf('/proxies') === 0;
+  if (needsApiKey && !checkApiKey(request, config)) {
+    return sendJSON({
+      error: { message: 'invalid api key' },
+    }, 401);  // HTTP 401 Unauthorized
+  }
+
+  // 第五步：GET 请求处理
+  if (method === 'GET') {
+    // -- 健康检查端点
+    if (path === '/' || path === '/health') {
+      var platform = 'Netlify Edge Functions';
+      if (typeof WebSocketPair !== 'undefined' || (env && env.PROXY_KV)) {
+        platform = 'Cloudflare Workers';
+      } else if (typeof Netlify !== 'undefined' || request.headers.get('x-nf-client-connection-ip')) {
+        platform = 'Netlify Edge Functions';
+      } else if (typeof process !== 'undefined' && process.env && process.env.NETLIFY) {
+        platform = 'Netlify Functions';
+      }
+
+      return sendJSON({
+        status: 'ok',
+        version: '1.7.3-multi-platform',
+        platform: platform,
+        models: Object.keys(MODELS),
+        defaultModel: config.defaultModel,
+        geminiBl: config.geminiBl,
+        hasCookie: !!config.cookieString,
+        hasSapisid: !!config.sapisid,
+        proxy: {
+          enabled: config.proxy.enabled,
+          mode: config.proxy.enabled ? 'pool' : 'direct',
         },
       });
     }
-
-    // 第二步：为当前请求创建独立的配置副本
-    //
-    // 🔑 这是解决并发串扰问题的核心步骤。
-    // 不修改任何全局变量，每个请求都有自己专属的 config 对象。
-    // env 参数是 Cloudflare 为每个请求独立提供的环境变量。
-    var config = getRequestConfig(env, ctx);
-
-    // 解析请求 URL 和方法
-    var requestUrl = new URL(request.url);
-    var path = requestUrl.pathname;
-    var method = request.method;
-
-    // 第三步：速率限制检查
-    //
-    // 使用真实客户端 IP（支持 CF-Connecting-IP 与 x-nf-client-connection-ip）
-    var clientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('x-nf-client-connection-ip') || request.headers.get('client-ip') || '0.0.0.0';
-    if (!checkRateLimit(clientIP, config)) {
-      log('Rate limit exceeded: ' + clientIP, 'WARN', config);
-      return sendJSON({
-        error: {
-          message: '请求过于频繁，请稍后再试',
-          type: 'rate_limit_exceeded',
-        },
-      }, 429);  // HTTP 429 Too Many Requests
-    }
-
-    // 第四步：API 密钥验证
-    //
-    // 仅对 /v1、/debug 与 /proxies 路径的请求进行密钥验证
-    // /health 等公共端点不需要验证
-    // /debug 与 /proxies 端点会暴露代理地址、延迟、失败计数等敏感诊断信息，
-    // 与 /v1 一样需要密钥保护（/proxies/refresh 也以 /proxies 前缀匹配，同样被保护）
-    var needsApiKey = path.indexOf('/v1') === 0 || path.indexOf('/debug') === 0 || path.indexOf('/proxies') === 0;
-    if (needsApiKey && !checkApiKey(request, config)) {
-      return sendJSON({
-        error: { message: 'invalid api key' },
-      }, 401);  // HTTP 401 Unauthorized
-    }
-
-    // 第五步：GET 请求处理
-    //
-    if (method === 'GET') {
-      // -- 健康检查端点
-      // 可用于监控 Worker 是否正常运行
-      // 返回版本号、模型列表、配置状态、代理池状态等信息
-      if (path === '/' || path === '/health') {
-        return sendJSON({
-          status: 'ok',
-          version: '1.7.3-cf-autoproxy',
-          platform: 'Cloudflare Workers',
-          models: Object.keys(MODELS),
-          defaultModel: config.defaultModel,
-          geminiBl: config.geminiBl,
-          hasCookie: !!config.cookieString,
-          hasSapisid: !!config.sapisid,
-          proxy: {
-            enabled: config.proxy.enabled,
-            activeCount: globalProxyState.proxies.length,
-            lastUpdated: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated).toISOString() : null,
-            nextUpdate: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated + (config.proxy.updateIntervalHours || 24) * 3600 * 1000).toISOString() : null,
-            rotationMode: config.proxy.rotationMode,
-          },
-        });
-      }
 
       // -- 代理池状态端点
       if (path === '/proxies') {
@@ -3963,24 +3960,29 @@ export default {
     // 第七步：未支持的 HTTP 方法
     //
     return sendJSON({ error: { message: 'method not allowed' } }, 405);
-  },
+}
 
-  /**
-   * Cloudflare Workers 定时触发器（Cron Trigger）
-   * 默认每 24 小时 (0 0 * * *) 自动触发一次，后台静默拉取并测试最新代理
-   * 
-   * @param {Object} event - 定时事件元数据 (例如 event.cron)
-   * @param {Object} env - 环境变量
-   * @param {Object} ctx - 执行上下文 (ctx.waitUntil)
-   */
-  async scheduled(event, env, ctx) {
-    var config = getRequestConfig(env, ctx);
-    log('收到定时任务触发 (Cron: ' + (event && event.cron ? event.cron : '24h') + ')，正在刷新代理池...', 'INFO', config);
-    try {
-      var proxies = await refreshProxyPool(config, env, ctx, true);
-      log('定时刷新代理池成功，当前存活可用代理: ' + proxies.length + ' 个', 'INFO', config);
-    } catch (err) {
-      log('定时刷新代理池异常: ' + err.message, 'ERROR', config);
-    }
-  },
+// 🚀 导出 Netlify Edge Functions & Netlify Functions 标准处理器
+export default async function handler(request, context) {
+  return handleRequest(request, null, context);
+}
+
+// 附加 fetch 属性，使其在 Cloudflare Workers 等环境也能直接运行
+handler.fetch = handleRequest;
+
+// 定时任务调度器（在支持的环境下可用）
+handler.scheduled = async function (event, env, ctx) {
+  var config = getRequestConfig(env, ctx);
+  log('收到定时任务触发，正在刷新代理池...', 'INFO', config);
+  try {
+    var proxies = await refreshProxyPool(config, env, ctx, true);
+    log('定时刷新代理池成功，当前存活可用代理: ' + proxies.length + ' 个', 'INFO', config);
+  } catch (err) {
+    log('定时刷新代理池异常: ' + err.message, 'ERROR', config);
+  }
+};
+
+// Netlify 路由配置：全路径拦截
+export const config = {
+  path: "/*"
 };

@@ -1,0 +1,21 @@
+# Netlify Configuration for free-gemini / gemini-web2api
+# Works seamlessly on both Netlify and Cloudflare
+
+
+# Netlify Edge Functions (Default: Runs globally on edge network, optimal for SSE streaming)
+[[edge_functions]]
+  path = "/*"
+  function = "gemini"
+
+# Serverless Functions configuration
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Global headers for CORS & SSE streaming
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "GET, POST, OPTIONS"
+    Access-Control-Allow-Headers = "*"
