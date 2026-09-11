@@ -1,6 +1,8 @@
 # Gemini Web2API - Cloudflare Workers Deployment Documentation
 
-[中文文档](cloudflare/README_CN.md)
+[中文文档](README_CN.md) | ⚡ **[Quick Setup Guide](SETUP.md)** (~5 min, zero to deployed)
+
+> 🚀 **New here?** Follow the [Quick Setup Guide](SETUP.md) — cookie, KV, secrets, deploy, verify, first request.
 
 ## 📖 Project Introduction
 
@@ -173,7 +175,7 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 | `AUTO_TEST_PROXY` | Auto-test proxies before adding to verified pool | `true` |
 | `PROXY_TEST_TIMEOUT_MS` | Per-proxy connection test timeout (ms) | `1000` |
 | `PROXY_UPDATE_INTERVAL_HOURS` | Proxy pool auto-update interval (hours) | `24` |
-| `PROXY_MAX_POOL_SIZE` | Maximum verified proxies to keep in pool | `30` |
+| `PROXY_MAX_POOL_SIZE` | Maximum verified proxies to keep in pool | `12` |
 | `PROXY_FALLBACK_DIRECT` | Fall back to direct connection if all proxies fail | `true` |
 | `PROXY_ROTATION_MODE` | Proxy selection algorithm — see [Proxy Rotation Modes](#proxy-rotation-modes) below | `best-of-2` |
 
@@ -223,8 +225,11 @@ Invalid values are ignored and logged as a `WARN`; the worker keeps the default 
    - In Cloudflare Dashboard: Go to **Workers & Pages** → Your Worker → **Triggers** → **Cron Triggers** → **Add Cron Trigger** → enter `0 0 * * *` (every 24 hours at 00:00 UTC).
 2. **On-Demand Auto-Update**:
    - Even if you don't configure a Cron Trigger, the Worker automatically checks the timestamp on incoming requests. If 24 hours have passed since the last update, it refreshes the proxy pool in the background using `ctx.waitUntil()` without slowing down user requests!
-3. **Cloudflare KV Persistence (Optional)**:
-   - Bind a KV namespace named `PROXY_KV` to your Worker. Verified proxies will be cached in KV across all edge data center instances! 4. **Proxy Endpoints** (all require a valid API key — same auth as `/v1` endpoints):
+3. **Cloudflare KV Persistence (Recommended with Cron)**:
+   - Bind a KV namespace named `PROXY_KV` to your Worker. Verified proxies will be cached in KV across all edge data center instances!
+   - **This is what makes the Cron Trigger effective**: the daily cron refresh runs in its own invocation with its own subrequest budget, tests the pool, and writes the verified result to KV — so user requests on any isolate load the warm pool from KV instead of paying the cold-start test cost.
+   - Setup: `npx wrangler kv namespace create PROXY_KV`, then paste the returned namespace `id` into the `kv_namespaces` block of `wrangler.jsonc` (a placeholder is already there).
+   - Without KV, the cron refresh only warms the cron's own throwaway isolate; each user-facing isolate still does its own cold-start refresh. 4. **Proxy Endpoints** (all require a valid API key — same auth as `/v1` endpoints):
     - `GET /proxies`: View proxy pool status, active proxy count, latencies, and last/next update times.
     - `POST /proxies/refresh` or `GET /proxies/refresh`: Force an immediate re-fetch and test of the proxy pool.
     - `GET /debug/proxies`: Detailed pool diagnostics — per-proxy health (`healthy`/`flaky`), latency, fail counts, rotation scores (highest first), and internal state (candidate cache, refresh due, rotation mode). Requires a valid API key (same auth as `/v1` endpoints).
@@ -369,8 +374,10 @@ Supports overriding thinking mode via `@think=` parameter:
 
 | Version | Date | Update Content |
 |-|-|-|
-| 1.7.0 | 2026-09-10 | Added ProxyScrape auto proxy fetching (timeout <= 200ms API or GitHub raw), auto connectivity test system via cloudflare:sockets (HTTP CONNECT, SOCKS5, SOCKS4), 24-hour automatic background update & Cron Trigger support (`0 0 * * *`), automatic failover & fallback to direct connection, `/proxies` and `/proxies/refresh` management endpoints |
+| 1.7.3 | 2026-09-11 | Reduced default `PROXY_MAX_POOL_SIZE` from 30 to 12 so a cold-start pool refresh uses far fewer subrequests (~14 vs ~32) |
+| 1.7.2 | 2026-09-11 | Fixed `Too many subrequests by single Worker invocation`: added a per-invocation subrequest budget — proxy pool refresh (source fetch + tests) is capped at 32 subrequests and stops early to reserve headroom for the actual Gemini request; proxy attempts and direct fallbacks are budget-tracked; fixed `startTls()` never working (`connect` missing `secureTransport: 'starttls'`) which made every proxied request hang |
 | 1.7.1 | 2026-09-10 | Switched proxy rotation to **Smart Round Robin** (inverse-latency weighted), reduced default `PROXY_TEST_TIMEOUT_MS` from 2000 to 1000, added free in-memory candidate cache (TTL = update interval) to avoid redundant upstream fetches |
+| 1.7.0 | 2026-09-10 | Added ProxyScrape auto proxy fetching (timeout <= 200ms API or GitHub raw), auto connectivity test system via cloudflare:sockets (HTTP CONNECT, SOCKS5, SOCKS4), 24-hour automatic background update & Cron Trigger support (`0 0 * * *`), automatic failover & fallback to direct connection, `/proxies` and `/proxies/refresh` management endpoints |
 | 1.6.0 | 2026-09-09 | Upgraded to Chrome 132-134 fingerprint library, streaming request 429 automatic exponential backoff retry, support flexible environment variable `API_KEY` (string/comma-separated/JSON), added `gemini-3.7-flash` and 2.0/2.5 compatibility aliases, health check returns detailed status |
 | 1.5.0 | 2026-07-31 | Added multi-fingerprint rotation, multi-Cookie rotation, random delay mechanism |
 | 1.4.0 | 2026-07-30 | Fixed concurrent crosstalk, rate limiting memory safety |

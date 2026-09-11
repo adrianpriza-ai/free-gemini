@@ -1,5 +1,9 @@
 # Gemini Web2API - Cloudflare Workers 部署文档
 
+[English](README.md) | ⚡ **[快速部署指南（SETUP.md）](SETUP.md)**（约 5 分钟，从零到部署完成）
+
+> 🚀 **第一次使用？** 跟随 [快速部署指南](SETUP.md)：Cookie 获取 → KV 创建 → 密钥配置 → 部署 → 验证 → 第一次请求。
+
 ## 📖 项目简介
 
 Gemini Web2API 是一个部署在 Cloudflare Workers 上的无服务器代理服务，将 Google Gemini 的 Web 界面转换为 OpenAI 兼容的 API 接口。无需服务器、无需 API Key（可选），开箱即用。
@@ -171,7 +175,7 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 | `AUTO_TEST_PROXY` | 加入代理池前自动进行连通性测试 | `true` |
 | `PROXY_TEST_TIMEOUT_MS` | 单个代理测试握手超时时间（毫秒） | `1000` |
 | `PROXY_UPDATE_INTERVAL_HOURS` | 代理池自动更新周期（小时） | `24` |
-| `PROXY_MAX_POOL_SIZE` | 代理池保留的最大可用代理数 | `30` |
+| `PROXY_MAX_POOL_SIZE` | 代理池保留的最大可用代理数 | `12` |
 | `PROXY_FALLBACK_DIRECT` | 代理全部失效时是否自动降级回退到直连 | `true` |
 | `PROXY_ROTATION_MODE` | 代理选择算法 — 见下方 [代理轮询模式](#代理轮询模式) | `best-of-2` |
 
@@ -221,8 +225,11 @@ PROXY_ROTATION_MODE=weighted
    - 在 Cloudflare 控制台：进入 **Workers & Pages** → 你的 Worker → **Triggers**（触发器） → **Cron Triggers** → **Add Cron Trigger** → 填写 `0 0 * * *`（每天 UTC 00:00 自动触发）。
 2. **按需后台更新**：
    - 即使未在控制台配置 Cron 定时器，Worker 在收到请求时也会比对时间戳。若距离上次更新已超过 24 小时，会自动使用 `ctx.waitUntil()` 在后台静默刷新代理池，完全不阻塞当前客户端请求！
-3. **Cloudflare KV 持久化（可选）**：
-   - 为 Worker 绑定名为 `PROXY_KV` 的 KV 命名空间，测速通过的代理池将持久化保存，并在全球各边缘节点间共享，降低冷启动开销。 4. **管理端点**（均需要有效的 API 密钥 —— 与 `/v1` 端点相同的认证方式）：
+3. **Cloudflare KV 持久化（配合 Cron 强烈推荐）**：
+   - 为 Worker 绑定名为 `PROXY_KV` 的 KV 命名空间，测速通过的代理池将持久化保存，并在全球各边缘节点间共享，降低冷启动开销。
+   - **这是让 Cron 定时任务真正生效的关键**：每日 Cron 刷新在独立调用中运行（拥有独立子请求预算），完成测速后把验证结果写入 KV —— 各隔离实例上的用户请求可直接从 KV 加载热池，无需再付出冷启动测试成本。
+   - 配置方法：执行 `npx wrangler kv namespace create PROXY_KV`，然后把返回的命名空间 `id` 填入 `wrangler.jsonc` 的 `kv_namespaces` 块（已有占位符）。
+   - 不绑定 KV 时，Cron 刷新只能温暖 Cron 自身的临时隔离实例；各用户请求隔离实例仍需各自执行冷启动刷新。 4. **管理端点**（均需要有效的 API 密钥 —— 与 `/v1` 端点相同的认证方式）：
     - `GET /proxies`：查看当前代理池状态、存活代理列表、各节点延迟及下次更新时间。
     - `POST /proxies/refresh` 或 `GET /proxies/refresh`：强制立即重新拉取并测试代理池。
     - `GET /debug/proxies`：代理池详细诊断 —— 每个代理的健康状态（`healthy`/`flaky`）、延迟、失败计数、轮换评分（按评分降序排列）及内部状态（候选缓存、是否到期刷新、轮换模式）。需要有效的 API 密钥（与 `/v1` 端点相同的认证方式）。
@@ -367,8 +374,10 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 
 | 版本 | 日期 | 更新内容 |
 |-|-|-|
-| 1.7.0 | 2026-09-10 | 新增 ProxyScrape 免费代理池自动抓取（默认 <=200ms API 与 GitHub 完整源）、基于 cloudflare:sockets 的代理连通性真实测试系统（HTTP CONNECT、SOCKS5、SOCKS4）、24 小时定时更新与 Cron 触发器支持（`0 0 * * *`）、故障自动轮换与直连降级兜底、新增 `/proxies` 与 `/proxies/refresh` 管理端点 |
+| 1.7.3 | 2026-09-11 | 默认 `PROXY_MAX_POOL_SIZE` 由 30 降至 12，冷启动代理池刷新消耗的子请求进一步减少（约 14 个，此前约 32 个） |
+| 1.7.2 | 2026-09-11 | 修复 `Too many subrequests by single Worker invocation`：新增每次调用的子请求预算管理 —— 代理池刷新（拉源 + 测试）上限 32 个子请求，触顶即停，为 Gemini 主请求预留额度；代理尝试与直连降级均纳入预算追踪；修复 `startTls()` 从未生效的问题（`connect` 缺少 `secureTransport: 'starttls'`，导致所有代理请求永久挂起） |
 | 1.7.1 | 2026-09-10 | 代理选择切换为 **Smart Round Robin 智能轮询**（按反向延迟加权）；`PROXY_TEST_TIMEOUT_MS` 默认值由 2000 调优为 1000；新增 Isolate 级候选代理缓存（TTL = 更新周期）避免重复打源 |
+| 1.7.0 | 2026-09-10 | 新增 ProxyScrape 免费代理池自动抓取（默认 <=200ms API 与 GitHub 完整源）、基于 cloudflare:sockets 的代理连通性真实测试系统（HTTP CONNECT、SOCKS5、SOCKS4）、24 小时定时更新与 Cron 触发器支持（`0 0 * * *`）、故障自动轮换与直连降级兜底、新增 `/proxies` 与 `/proxies/refresh` 管理端点 |
 | 1.6.0 | 2026-09-09 | 升级至 Chrome 132-134 指纹库、流式请求 429 自动指数退避重试、支持灵活的环境变量 `API_KEY`（字符串/逗号分隔/JSON）、新增 `gemini-3.7-flash` 及 2.0/2.5 兼容别名、健康检查返回详细状态 |
 | 1.5.0 | 2026-07-31 | 新增多指纹轮换、多Cookie轮换、随机延迟机制 |
 | 1.4.0 | 2026-07-30 | 修复并发串扰、速率限制内存安全 |

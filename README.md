@@ -8,6 +8,8 @@
 
 Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, cross-platform, single file.
 
+> ☁️ **Prefer serverless?** Deploy the same API to Cloudflare Workers (free, no server to run) — see the [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or the full [Cloudflare deployment docs](cloudflare/README.md).
+
 ## Features
 
 - **Optional API Keys**: no auth when `api_keys` is empty, OpenAI-style Bearer auth when configured

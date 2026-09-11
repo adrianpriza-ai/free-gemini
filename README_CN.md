@@ -8,6 +8,8 @@
 
 将 Google Gemini 网页端转换为 OpenAI 兼容 API. 零成本, 跨平台, 单文件.
 
+> ☁️ **想要无服务器部署?** 可将同样的 API 部署到 Cloudflare Workers (免费, 无需自己的服务器) — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP.md) 或 [完整部署文档](cloudflare/README_CN.md).
+
 ## 特性
 
 - **可选密钥**: `api_keys` 为空时免密, 填入密钥后按 OpenAI Bearer Key 校验
@@ -35,7 +37,7 @@ python gemini_web2api.py
 ### Cherry Studio / ChatBox / 任何 OpenAI 兼容客户端
 
 | 字段 | 值 |
-|-||
+|-|-|
 | Base URL | `http://localhost:8081/v1` |
 | API Key | `config.json` 中的任意 `api_keys`；未配置时随便填 |
 | Model | `gemini-3.5-flash-thinking` |

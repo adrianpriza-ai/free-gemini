@@ -118,8 +118,8 @@ var DEFAULT_CONFIG = {
     autoTest: true,
     // 单个代理连接与握手测试超时（毫秒）
     testTimeoutMs: 1000,
-    // 代理池最大保留数量（避免占用过多 Worker 内存）
-    maxPoolSize: 30,
+    // 代理池最大保留数量（避免占用过多 Worker 内存；也限制刷新时的代理测试子请求数）
+    maxPoolSize: 12,
     // 代理池更新间隔时间（小时，默认 24 小时）
     updateIntervalHours: 24,
     // 当所有代理不可用时是否自动降级回退到直连（确保业务高可用）
@@ -1078,6 +1078,76 @@ async function buildHeaders(config) {
 
 // 🌐 代理池系统 (ProxyScrape 自动获取 + 连通性测试 + 24小时自动更新)
 
+// ============================================================
+// 📊 Cloudflare Workers 子请求预算管理器
+//
+// 【为什么需要这个？】
+// CF Workers 限制单次请求调用（invocation）最多发起约 50 个子请求
+// （免费计划实测约 50 个，付费计划约 1000 个）。每个 fetch() 和每个
+// TCP socket（connect()）都算一个子请求。
+//
+// 之前的冷启动路径会一次性测试多达 60 个代理 + 拉取代理源 + 真正的
+// Gemini 请求，预算必然耗尽，剩余的 fetch() 直接抛出
+// "Too many subrequests by single Worker invocation"。
+//
+// 【预算分配策略】
+//   代理池刷新（拉源+测试）上限: 32   ← 最多也只验证 16 个代理
+//   Gemini 主请求预留:          12   ← 至少 8 次直连重试的机会
+//
+// 超预算时的行为：不抛错、不中断，而是"未雨绸缪"——提前停止测试代理，
+// 保证真正的业务请求（Gemini）永远有子请求额度可用。
+// ============================================================
+// 之前每批 6 个、最多测 60 个代理，加上拉源 fetch 和 Gemini 主请求本身，
+// 预算必然耗尽，剩余的 fetch() 直接抛出
+// "Too many subrequests by single Worker invocation"。
+//
+// 【预算分配策略】
+//   代理池刷新（拉源+测试）上限: 32   ← 拉源 2 个 + 测试约 30 个 = 最多验证约 15 个
+//   为 Gemini 主请求保留:       ≥18  ← 重试与直连降级永远有余量
+//
+// 超预算时的行为：不抛错、不中断，而是"未雨绸缪"——提前停止测试代理，
+// 保证真正的业务请求（Gemini）永远有子请求额度可用。
+// ============================================================
+var SUBREQUEST_BUDGET = {
+  // 每个请求调用允许的最大子请求数（保守估计免费计划约 50）
+  perInvocationLimit: 50,
+  // 代理池刷新（拉取源 + 连通性测试）的子请求上限
+  proxyRefreshCap: 32,
+  // 为 Gemini 主请求（含重试与直连降级）保留的子请求数
+  mainRequestReserve: 18,
+};
+
+/**
+ * 子请求预算状态（请求级）
+ *
+ * config 是每个请求独立的对象（getRequestConfig 创建），整个调用生命周期
+ * 内贯穿所有函数，因此把计数器直接挂在 config 上即可精确关联到单次调用，
+ * 无需 WeakMap。
+ *
+ * refreshBudget: 代理池刷新（拉源 + 测试）最多还能消耗多少个子请求
+ * totalUsed:     本次调用累计已消耗的子请求数（含 Gemini 主请求）
+ */
+function getBudgetState(config) {
+  if (!config._subrequestBudget) {
+    config._subrequestBudget = { totalUsed: 0, refreshSpent: 0 };
+  }
+  return config._subrequestBudget;
+}
+
+/**
+ * 记录一个即将/已经发出的子请求
+ * @returns {boolean} 是否仍在代理刷新预算内
+ */
+function trackSubrequest(config, kind) {
+  var b = getBudgetState(config);
+  b.totalUsed += 1;
+  if (kind === 'refresh') {
+    b.refreshSpent += 1;
+    return b.refreshSpent <= SUBREQUEST_BUDGET.proxyRefreshCap;
+  }
+  return true; // 主请求等非刷新子请求不受刷新预算约束，但仍计入总数用于观测
+}
+
 /**
  * 全局代理状态管理器（在 Isolate 存活期间常驻）
  */
@@ -1789,7 +1859,7 @@ async function fetchProxyCandidates(config, force) {
   var proxies = [];
   var seen = new Set();
 
-  // 1. 用户自定义固定静态代理
+  // 1. 用户自定义固定静态代理（零子请求成本，不计入预算）
   if (config.proxy && config.proxy.staticProxies && config.proxy.staticProxies.length > 0) {
     for (var sp of config.proxy.staticProxies) {
       var parsed = parseProxy(sp);
@@ -1804,8 +1874,10 @@ async function fetchProxyCandidates(config, force) {
   }
 
   // 2. 从主代理源拉取 (ProxyScrape 200ms timeout API)
+  // 📊 每次上游拉取计为 1 个刷新子请求
   var fetchedText = '';
   if (config.proxy && config.proxy.sourceUrl) {
+    trackSubrequest(config, 'refresh');
     try {
       var res = await fetch(config.proxy.sourceUrl, {
         headers: { 'User-Agent': 'curl/8.0.0' }
@@ -1820,6 +1892,7 @@ async function fetchProxyCandidates(config, force) {
 
   // 3. 若主代理源为空，拉取备用源 (GitHub raw 完整列表)
   if (!fetchedText.trim() && config.proxy && config.proxy.fallbackSourceUrl) {
+    trackSubrequest(config, 'refresh');
     try {
       var fbRes = await fetch(config.proxy.fallbackSourceUrl, {
         headers: { 'User-Agent': 'curl/8.0.0' }
@@ -1909,14 +1982,30 @@ async function refreshProxyPool(config, env, ctx, force) {
     if (config.proxy && config.proxy.autoTest) {
       var verified = [];
       var batchSize = 6;
-      var maxPool = config.proxy.maxPoolSize || 30;
+      var maxPool = config.proxy.maxPoolSize || 12;
       var testTimeout = config.proxy.testTimeoutMs || 1000;
 
       // 限制测试候选数量，防止超量消耗 Worker 资源
       var toTest = candidates.slice(0, Math.min(candidates.length, maxPool * 2));
 
+      // 📊 预算状态：刷新子请求（拉源 fetch + 每个代理测试的 connect()）共享一个上限，
+      // 且整个调用有硬上限。触及任一上限即停止测试，把子请求额度留给真正的 Gemini 请求。
+      var refreshSpent = 0;
+      var budgetState = getBudgetState(config);
+
       for (var i = 0; i < toTest.length && verified.length < maxPool; i += batchSize) {
+        // 预算检查（按批次粒度）：刷新预算耗尽，或整个调用的子请求总数逼近平台硬上限时停止
+        if (refreshSpent + batchSize > SUBREQUEST_BUDGET.proxyRefreshCap ||
+            budgetState.totalUsed + batchSize > SUBREQUEST_BUDGET.perInvocationLimit - SUBREQUEST_BUDGET.mainRequestReserve) {
+          log('子请求预算已耗尽（刷新已用 ' + refreshSpent + '，调用总计 ' + budgetState.totalUsed + '），提前停止代理测试以保住 Gemini 请求额度', 'WARN', config);
+          break;
+        }
+
         var batch = toTest.slice(i, i + batchSize);
+        // 每个代理测试各消耗 1 个子请求（connect()），按批记账
+        refreshSpent += batch.length;
+        budgetState.refreshSpent = refreshSpent;
+        budgetState.totalUsed += batch.length;
         var testResults = await Promise.allSettled(batch.map(function (c) {
           return testProxy(c, testTimeout).then(function (res) {
             return { candidate: c, result: res };
@@ -1938,7 +2027,7 @@ async function refreshProxyPool(config, env, ctx, force) {
       globalProxyState.proxies = verified;
       log('代理测试完成，有效代理数量: ' + verified.length, 'INFO', config);
     } else {
-      globalProxyState.proxies = candidates.slice(0, config.proxy.maxPoolSize || 30).map(function (c) {
+      globalProxyState.proxies = candidates.slice(0, config.proxy.maxPoolSize || 12).map(function (c) {
         c.latency = 0;
         c.fails = 0;
         return c;
@@ -2002,6 +2091,7 @@ async function ensureProxyReady(config) {
 async function geminiFetch(url, options, config) {
   // 未开启代理时，直接使用标准直连 fetch
   if (!config.proxy || !config.proxy.enabled) {
+    trackSubrequest(config, 'main');
     return fetch(url, options);
   }
 
@@ -2012,9 +2102,13 @@ async function geminiFetch(url, options, config) {
   }
 
   var usableProxies = globalProxyState.proxies;
+  var budgetState = getBudgetState(config);
+
+  // 📊 无代理时优先走直连（计 1 个子请求）
   if (!usableProxies || usableProxies.length === 0) {
     if (config.proxy.fallbackDirect) {
       log('代理池暂无可用代理，自动降级回退到直连', 'WARN', config);
+      trackSubrequest(config, 'main');
       return fetch(url, options);
     }
     throw new Error('代理池无可用代理且 fallbackDirect 已禁用');
@@ -2077,8 +2171,18 @@ async function geminiFetch(url, options, config) {
       globalProxyState.currentIndex = (usableProxies.indexOf(proxy) + 1) % n;
     }
 
+    // 📊 平台子请求硬上限保护：直连降级（1 个）+ 已用数不能逼近平台限制，
+    // 否则干脆跳过代理尝试，直接降级，避免耗尽后连直连都发不出去
+    var remainingBeforeProxy = SUBREQUEST_BUDGET.perInvocationLimit - SUBREQUEST_BUDGET.mainRequestReserve - budgetState.totalUsed;
+    if (remainingBeforeProxy < 2 && config.proxy.fallbackDirect) {
+      log('子请求预算接近平台上限（已用 ' + budgetState.totalUsed + '），跳过代理尝试，直接降级直连', 'WARN', config);
+      trackSubrequest(config, 'main');
+      return fetch(url, options);
+    }
+
     try {
       log('通过代理 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + '] 发送请求', 'INFO', config);
+      budgetState.totalUsed += 1; // 每次代理尝试消耗 1 个子请求（connect()）
       var t0 = Date.now();
       var resp = await fetchViaProxy(url, options, proxy, config);
       // EWMA 延迟更新: α=0.3,新样本足以追踪变化,又不会被单次抖动主导
@@ -2103,6 +2207,7 @@ async function geminiFetch(url, options, config) {
 
   if (config.proxy.fallbackDirect) {
     log('所有代理尝试失败，自动降级回退到直连: ' + (lastError ? lastError.message : ''), 'WARN', config);
+    trackSubrequest(config, 'main');
     return fetch(url, options);
   }
 
@@ -3627,7 +3732,7 @@ export default {
       if (path === '/' || path === '/health') {
         return sendJSON({
           status: 'ok',
-          version: '1.7.0-cf-autoproxy',
+          version: '1.7.3-cf-autoproxy',
           platform: 'Cloudflare Workers',
           models: Object.keys(MODELS),
           defaultModel: config.defaultModel,

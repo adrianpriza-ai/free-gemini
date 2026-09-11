@@ -5,5 +5,11 @@
   "compatibility_date": "2026-09-06",
   "triggers": {
     "crons": ["0 0 * * *"]
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "PROXY_KV",
+      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+    }
+  ]
 }
