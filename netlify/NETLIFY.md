@@ -1,6 +1,6 @@
 # Gemini Web2API - Netlify Deployment Documentation
 
-[中文文档](NETLIFY_CN.md) | [Cloudflare Docs](cloudflare/README.md)
+[中文文档](NETLIFY_CN.md) | [Cloudflare Docs](../cloudflare/README.md)
 
 Deploy Gemini Web2API serverless on Netlify Edge Functions with true SSE streaming, global low-latency edge network, and zero server maintenance costs.
 
@@ -129,3 +129,27 @@ netlify dev
 ```
 
 The local edge server will start at `http://localhost:8888`.
+
+---
+
+## 🚨 Troubleshooting
+
+### `Error - Request ID: 01M...`
+
+This is Netlify's generic error page. It appears when the edge function crashes
+with an unhandled exception, **or** when it fails to send response headers within
+**Netlify's 40-second response-header timeout**. Check the function logs in the
+Netlify dashboard (**Logs → Edge Functions**) for the real error.
+
+Common causes and fixes:
+
+| Cause | Fix |
+|---|---|
+| Upstream Gemini unreachable/slow, retries exceeded the 40s header deadline | Already mitigated: non-streaming requests are capped to a 30s pre-response deadline. If it still happens, reduce `REQUEST_TIMEOUT_SEC` (e.g. `10`). |
+| Malformed client request (e.g. non-string `model`, non-object JSON body) | Already mitigated: invalid input now returns a structured `400` instead of crashing. |
+| Expired `GEMINI_BL` build label (HTTP 405 from upstream) | Open `https://gemini.google.com/app`, press F12 → Network tab, search any request URL for `boq_assistant`, copy the newest label into the `GEMINI_BL` environment variable. |
+| Rate limited by Google (HTTP 429) | Add a valid `COOKIE_STRING` (+ `SAPISID`) environment variable, or lower request frequency. |
+| Bug crashing the handler | Already mitigated: the entry handler now has a top-level try/catch that returns a JSON `500` with the error message instead of Netlify's opaque error page. |
+
+> 💡 After any crash, the exact error is now visible in the JSON response body
+> and in the Netlify function logs, instead of the opaque `Error - Request ID` page.

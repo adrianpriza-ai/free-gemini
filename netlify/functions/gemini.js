@@ -2273,6 +2273,19 @@ async function geminiFetch(url, options, config) {
  * @throws {Error} 所有重试失败后抛出最后的错误
  */
 async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
+  // ⏱️ 响应头截止时间（重要：Netlify Edge 平台限制）
+  //
+  // Netlify Edge Functions 要求响应头必须在 40 秒内发出，否则平台会
+  // 中断请求并返回通用的 "Error - Request ID: ..." 错误页。
+  // 旧版重试逻辑（3 次 × 28s 超时 + 指数退避 + Retry-After 等待）
+  // 最坏情况可达 90+ 秒，必然触发该平台错误。
+  //
+  // 这里为非流式路径设定 30 秒硬截止：所有重试与等待都必须在此之前
+  // 完成并拿到上游响应（响应体的传输不受此限制，只约束"首字节/响应头"）。
+  // 流式路径的响应头立即可用，不受此限制。
+  var PRERESPONSE_DEADLINE_MS = 30 * 1000;
+  var deadline = Date.now() + PRERESPONSE_DEADLINE_MS;
+
   // 🎭 请求前添加随机微小延迟（模拟人类操作间隔）
   // 延迟时间在 0 到 fingerprintJitterMs 毫秒之间随机均匀分布
   // 例如 fingerprintJitterMs=1500 时，延迟在 0 到 1.5 秒之间
@@ -2291,6 +2304,14 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
 
   // 重试循环
   for (var attempt = 0; attempt < config.retryAttempts; attempt++) {
+    // ⏱️ 截止时间检查：剩余时间不足以完成一次有意义的请求时停止重试，
+    // 避免总耗时越过 Netlify 的 40 秒响应头限制（导致 "Error - Request ID" 页面）
+    var remainingMs = deadline - Date.now();
+    if (remainingMs < 3000) {
+      log('非流式请求响应截止时间（30s）将耗尽，停止重试以保住响应头时限', 'WARN', config);
+      break;
+    }
+
     try {
       // 🎭 重试时重新构建请求头（使用不同的浏览器指纹）
       // 这增加了重试成功的机会
@@ -2305,10 +2326,13 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
       }
 
       // 创建 AbortController 用于超时控制
+      // 单次尝试超时不得超过剩余截止时间（最多再留 500ms 余量给头部处理）
+      var remainingForAttempt = deadline - Date.now();
+      var attemptTimeoutMs = Math.max(1000, Math.min(config.requestTimeoutSec * 1000, remainingForAttempt - 500));
       var controller = new AbortController();
       var timeout = setTimeout(function () {
         controller.abort();  // 超时后中止请求
-      }, config.requestTimeoutSec * 1000);
+      }, attemptTimeoutMs);
 
       // 发送 HTTP POST 请求（通过代理池或直连）
       var response = await geminiFetch(url, {
@@ -2327,15 +2351,19 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
       // Gemini 更新了前端，需要同步更新 geminiBl 配置
       if (response.status === 405) {
         throw new Error('HTTP 405: Method Not Allowed - 可能 BL 版本过期，请更新 geminiBl');
-      }
-
-      // 429 Too Many Requests: 请求频率超限
+      }      // 429 Too Many Requests: 请求频率超限
       // 等待服务器指定的 Retry-After 时间后重试
+
       if (response.status === 429) {
         var retryAfter = parseInt(response.headers.get('Retry-After') || '5', 10);
         log('收到 429 限流，等待 ' + retryAfter + ' 秒后重试...', 'WARN', config);
         if (attempt < config.retryAttempts - 1) {
-          await new Promise(function (resolve) { setTimeout(resolve, retryAfter * 1000); });
+          // ⏱️ 等待时间封顶：不得超过响应截止时间的剩余量，防止越过 Netlify 40s 限制
+          var waitMs = Math.min(retryAfter * 1000, deadline - Date.now());
+          if (waitMs < 1000) {
+            throw new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
+          }
+          await new Promise(function (resolve) { setTimeout(resolve, waitMs); });
           continue;  // 跳过本次，进入下一次重试
         }
         throw new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
@@ -2368,7 +2396,12 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
       if (attempt < config.retryAttempts - 1) {
         log('重试 ' + (attempt + 1) + '/' + config.retryAttempts + ': ' + error.message, 'WARN', config);
         // 指数退避: 延迟时间 = 基础延迟 * 2^attempt
-        var delay = config.retryDelaySec * Math.pow(2, attempt) * 1000;
+        // ⏱️ 退避等待封顶：不得超过响应截止时间的剩余量
+        var delay = Math.min(config.retryDelaySec * Math.pow(2, attempt) * 1000, deadline - Date.now());
+        if (delay < 500) {
+          // 剩余时间不足，直接放弃重试，把最后的错误抛给上层
+          break;
+        }
         await new Promise(function (resolve) { setTimeout(resolve, delay); });
       }
     }
@@ -2972,6 +3005,16 @@ function sendSSE(stream) {
  */
 function resolveModel(modelName) {
   var thinkOverride = null;
+
+  // 🛡️ 防御性类型检查：客户端可能传入数字、null、对象等非字符串类型的 model。
+  // 若不拦截，下方 indexOf/split 会抛出 TypeError，导致整个请求 500。
+  if (modelName === null || modelName === undefined) {
+    return { error: 'missing model' };
+  }
+  if (typeof modelName !== 'string') {
+    modelName = String(modelName);
+  }
+
   var actualModelName = modelName;
 
   // 检查是否包含 @think= 参数
@@ -3925,6 +3968,12 @@ async function handleRequest(request, envOrContext, ctx) {
         return sendJSON({ error: { message: 'invalid JSON' } }, 400);
       }
 
+      // 🛡️ 防御性检查：body 必须是普通对象。
+      // null / 数组 / 字符串等会让后续 body.model 访问抛 TypeError 导致 500。
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        body = {};
+      }
+
       // -- OpenAI Chat Completions API
       // 这是最常用的端点，处理聊天补全请求
       if (path === '/v1/chat/completions') {
@@ -3963,8 +4012,24 @@ async function handleRequest(request, envOrContext, ctx) {
 }
 
 // 🚀 导出 Netlify Edge Functions & Netlify Functions 标准处理器
+//
+// 🛡️ 顶层兜底异常处理
+// Netlify 对未捕获异常的处理方式是：丢弃函数响应，返回通用的
+// "Error - Request ID: ..." 页面（无 CORS 头、非 JSON、客户端无法解析）。
+// 这里捕获所有未被上层捕获的异常，转换为结构化的 500 JSON 响应。
 export default async function handler(request, context) {
-  return handleRequest(request, null, context);
+  try {
+    return await handleRequest(request, null, context);
+  } catch (error) {
+    var errMsg = error && error.message ? error.message : String(error);
+    try { log('Unhandled error: ' + errMsg, 'ERROR', null); } catch (logErr) {}
+    return sendJSON({
+      error: {
+        message: 'internal error: ' + errMsg,
+        type: 'internal_error',
+      },
+    }, 500);
+  }
 }
 
 // 附加 fetch 属性，使其在 Cloudflare Workers 等环境也能直接运行

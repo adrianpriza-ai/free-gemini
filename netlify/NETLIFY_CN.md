@@ -1,6 +1,6 @@
 # Gemini Web2API - Netlify 部署指南
 
-[English](NETLIFY.md) | [Cloudflare 部署文档](cloudflare/README_CN.md)
+[English](NETLIFY.md) | [Cloudflare 部署文档](../cloudflare/README_CN.md)
 
 将 Gemini Web2API 无缝部署到 Netlify Edge Functions，享受真正的打字机 SSE 流式传输输出、全球低延迟边缘节点网络，且无需自行维护服务器。
 
@@ -129,3 +129,26 @@ netlify dev
 ```
 
 本地服务默认监听在 `http://localhost:8888`。
+
+---
+
+## 🚨 故障排查
+
+### `Error - Request ID: 01M...`
+
+这是 Netlify 的通用错误页。出现该页面通常有两种原因：Edge Function 发生了
+未捕获异常，或者未能在 **Netlify 的 40 秒响应头时限**内发出响应头。可在
+Netlify 控制台的 **Logs → Edge Functions** 中查看真实错误。
+
+常见原因与解决办法：
+
+| 原因 | 解决办法 |
+|---|---|
+| 上游 Gemini 不可达/响应慢，重试耗时超过 40s 响应头时限 | 已修复：非流式请求的响应前总耗时被限制在 30 秒以内。如仍复现，可调低 `REQUEST_TIMEOUT_SEC`（如 `10`）。 |
+| 客户端请求格式异常（如 `model` 不是字符串、JSON body 不是对象） | 已修复：非法输入现在会返回结构化的 `400`，而不是崩溃。 |
+| `GEMINI_BL` 构建标签过期（上游返回 405） | 打开 `https://gemini.google.com/app`，按 F12 → Network 标签，在任意请求 URL 中搜索 `boq_assistant`，把最新标签填入 `GEMINI_BL` 环境变量。 |
+| 被 Google 限流（上游返回 429） | 在环境变量中配置有效的 `COOKIE_STRING`（及 `SAPISID`），或降低请求频率。 |
+| 代码缺陷导致 Handler 崩溃 | 已修复：入口 Handler 现在带有顶层 try/catch，会返回包含错误信息的 JSON `500`，而不是 Netlify 的不透明错误页。 |
+
+> 💡 修复后，任何异常都会以 JSON 响应体和 Netlify 函数日志的形式暴露真实错误，
+> 不再只显示 `Error - Request ID` 这种不透明的提示。
