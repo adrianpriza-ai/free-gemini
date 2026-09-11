@@ -320,6 +320,11 @@ function getRandomSecChUaPlatform() {
 //   4 = AUTO（自动选择思考深度，由 Gemini 决定）
 
 var MODELS = {
+  'gemini-3.8-flash': {
+    mode: 1,        // FAST - 快速模式
+    think: 4,       // AUTO - 自动选择思考深度
+    desc: 'Newest all-around model (Gemini 3.8 Flash)',
+  },
   'gemini-3.7-flash': {
     mode: 1,        // FAST - 快速模式
     think: 4,       // AUTO - 自动选择思考深度
@@ -1381,10 +1386,47 @@ async function establishSocks4Tunnel(socket, targetHost, targetPort, auth) {
 }
 
 /**
+ * 带空闲看门狗的读取器包装
+ *
+ * 问题：await reader.read() 会无限期挂起。如果代理在响应中途断流
+ * （黑名单代理常见行为：TLS 握手成功、响应头正常，然后静默丢弃连接），
+ * 客户端会永远收不到任何数据，表现为"请求卡死"。
+ *
+ * 解决：每次 read() 外包一层 race 超时。空闲超过 idleTimeoutMs 就抛出错误，
+ * 由上层（geminiFetch 重试循环 / 直连降级）接管处理。
+ *
+ * @param {ReadableStreamDefaultReader} rawReader - 底层 socket reader
+ * @param {Function|undefined} watchdogFn - 返回空闲超时毫秒数的回调（可选）
+ * @returns {Promise<{done: boolean, value?: Uint8Array}>} 与 reader.read() 同构的结果
+ */
+async function readWithWatchdog(rawReader, watchdogFn) {
+  if (typeof watchdogFn !== 'function') {
+    return rawReader.read();
+  }
+  var idleTimeoutMs = watchdogFn();
+  if (!idleTimeoutMs || idleTimeoutMs <= 0) {
+    return rawReader.read();
+  }
+  var idleTimer = null;
+  try {
+    return await Promise.race([
+      rawReader.read(),
+      new Promise(function (_, reject) {
+        idleTimer = setTimeout(function () {
+          reject(new Error('代理响应流空闲超时 (' + idleTimeoutMs + 'ms)，可能已断流'));
+        }, idleTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+  }
+}
+
+/**
  * 创建 HTTP 分块传输解码流 (Chunked Transfer Decoder)
  * 支持打字机 SSE 流式实时解包
  */
-function createChunkedDecoderStream(initialBuffer, rawReader) {
+function createChunkedDecoderStream(initialBuffer, rawReader, watchdogFn) {
   var buffer = initialBuffer ? new Uint8Array(initialBuffer) : new Uint8Array(0);
   var streamClosed = false;
 
@@ -1412,7 +1454,7 @@ function createChunkedDecoderStream(initialBuffer, rawReader) {
         }
 
         if (crlfIdx === -1) {
-          var res = await rawReader.read();
+          var res = await readWithWatchdog(rawReader, watchdogFn);
           if (res.done) {
             streamClosed = true;
             if (buffer.length > 0) controller.enqueue(buffer);
@@ -1443,7 +1485,7 @@ function createChunkedDecoderStream(initialBuffer, rawReader) {
 
         var totalNeeded = crlfIdx + 2 + chunkSize + 2;
         while (buffer.length < totalNeeded) {
-          var more = await rawReader.read();
+          var more = await readWithWatchdog(rawReader, watchdogFn);
           if (more.done) {
             var partial = buffer.subarray(crlfIdx + 2);
             if (partial.length > 0) controller.enqueue(partial);
@@ -1470,7 +1512,7 @@ function createChunkedDecoderStream(initialBuffer, rawReader) {
 /**
  * 创建非分块传输原始解码流
  */
-function createRawDecoderStream(initialBuffer, rawReader, contentLength) {
+function createRawDecoderStream(initialBuffer, rawReader, contentLength, watchdogFn) {
   var buffer = initialBuffer ? new Uint8Array(initialBuffer) : new Uint8Array(0);
   var emitted = 0;
   var streamClosed = false;
@@ -1498,7 +1540,7 @@ function createRawDecoderStream(initialBuffer, rawReader, contentLength) {
         return;
       }
 
-      var res = await rawReader.read();
+      var res = await readWithWatchdog(rawReader, watchdogFn);
       if (res.done) {
         streamClosed = true;
         controller.close();
@@ -1539,7 +1581,10 @@ async function testProxy(proxy, timeoutMs) {
 
   try {
     var testPromise = (async function () {
-      socket = connect({ hostname: proxy.host, port: proxy.port });
+      // 🔧 关键修复：secureTransport 必须为 'starttls'。
+      // startTls() 只允许在 secureTransport='starttls' 的 socket 上调用，
+      // 否则会抛出异常/挂起，导致代理测试永远失败。
+      socket = connect({ hostname: proxy.host, port: proxy.port }, { secureTransport: 'starttls' });
       if (proxy.protocol === 'socks5') {
         await establishSocks5Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
       } else if (proxy.protocol === 'socks4') {
@@ -1587,7 +1632,8 @@ async function fetchViaProxy(url, options, proxy, config) {
 
   try {
     var run = async function () {
-      socket = connect({ hostname: proxy.host, port: proxy.port });
+      // 🔧 关键修复：secureTransport 必须为 'starttls'（见 testProxy 内注释）。
+      socket = connect({ hostname: proxy.host, port: proxy.port }, { secureTransport: 'starttls' });
 
       if (options.signal) {
         if (options.signal.aborted) {
@@ -1609,7 +1655,9 @@ async function fetchViaProxy(url, options, proxy, config) {
       }
 
       // 升级 TLS 会话
-      var tlsSocket = socket.startTls({ servername: 'gemini.google.com' });
+      // 🔧 修复：workerd 的 TlsOptions 只认 expectedServerHostname（servername 是 Node 风格的写法，
+      // 会被静默忽略），显式指定 SNI 以便证书校验通过。
+      var tlsSocket = socket.startTls({ expectedServerHostname: 'gemini.google.com' });
 
       // 构建 HTTP/1.1 请求报文
       var urlObj = new URL(url);
@@ -1684,10 +1732,15 @@ async function fetchViaProxy(url, options, proxy, config) {
       var contentLength = clHeader ? parseInt(clHeader, 10) : null;
 
       var bodyStream;
+      // 空闲看门狗：流式转发期间如果代理长时间不再吐数据（断流/黑洞），
+      // 抛错而不是永久挂起。取单次请求超时的 2 倍作为空闲上限。
+      var idleWatchdog = function () {
+        return (config.requestTimeoutSec || 28) * 1000 * 2;
+      };
       if (isChunked) {
-        bodyStream = createChunkedDecoderStream(remaining, reader);
+        bodyStream = createChunkedDecoderStream(remaining, reader, idleWatchdog);
       } else {
-        bodyStream = createRawDecoderStream(remaining, reader, contentLength);
+        bodyStream = createRawDecoderStream(remaining, reader, contentLength, idleWatchdog);
       }
 
       var contentEncoding = (respHeaders.get('content-encoding') || '').toLowerCase();
@@ -3554,9 +3607,12 @@ export default {
 
     // 第四步：API 密钥验证
     //
-    // 仅对 /v1 路径的请求进行密钥验证
-    // /health, /proxies 等公共端点不需要验证
-    if (path.indexOf('/v1') === 0 && !checkApiKey(request, config)) {
+    // 仅对 /v1、/debug 与 /proxies 路径的请求进行密钥验证
+    // /health 等公共端点不需要验证
+    // /debug 与 /proxies 端点会暴露代理地址、延迟、失败计数等敏感诊断信息，
+    // 与 /v1 一样需要密钥保护（/proxies/refresh 也以 /proxies 前缀匹配，同样被保护）
+    var needsApiKey = path.indexOf('/v1') === 0 || path.indexOf('/debug') === 0 || path.indexOf('/proxies') === 0;
+    if (needsApiKey && !checkApiKey(request, config)) {
       return sendJSON({
         error: { message: 'invalid api key' },
       }, 401);  // HTTP 401 Unauthorized
@@ -3583,7 +3639,6 @@ export default {
             activeCount: globalProxyState.proxies.length,
             lastUpdated: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated).toISOString() : null,
             nextUpdate: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated + (config.proxy.updateIntervalHours || 24) * 3600 * 1000).toISOString() : null,
-            sourceUrl: config.proxy.sourceUrl,
             rotationMode: config.proxy.rotationMode,
           },
         });
@@ -3599,8 +3654,6 @@ export default {
             lastUpdated: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated).toISOString() : null,
             nextUpdate: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated + (config.proxy.updateIntervalHours || 24) * 3600 * 1000).toISOString() : null,
             updateIntervalHours: config.proxy.updateIntervalHours,
-            sourceUrl: config.proxy.sourceUrl,
-            fallbackSourceUrl: config.proxy.fallbackSourceUrl,
             autoTest: config.proxy.autoTest,
             testTimeoutMs: config.proxy.testTimeoutMs,
             fallbackDirect: config.proxy.fallbackDirect,
@@ -3631,6 +3684,74 @@ export default {
               latencyMs: p.latency,
             };
           }),
+        });
+      }
+
+      // -- 代理池调试端点 (GET /debug/proxies)
+      // 报告代理池健康度、各代理延迟与失败计数及内部状态，用于诊断代理系统问题
+      if (path === '/debug/proxies') {
+        var nowDebug = Date.now();
+        var intervalMsDebug = (config.proxy.updateIntervalHours || 24) * 3600 * 1000;
+        var poolProxies = globalProxyState.proxies;
+
+        // 与 geminiFetch 完全相同的评分公式，便于观察 best-of-2/weighted 会优先选谁
+        // score = reliability(fails) / (latency + 1)，延迟缺失时回退 1000ms
+        var scoreOfDebug = function (p) {
+          var lat = (typeof p.latency === 'number' && p.latency > 0) ? p.latency : 1000;
+          var fails = p.fails || 0;
+          var reliability = fails === 0 ? 1 : Math.pow(0.5, fails);
+          return reliability / (lat + 1);
+        };
+
+        var healthyCount = 0;
+        var flakyCount = 0;
+        var totalLatency = 0;
+        var latencyCount = 0;
+        var proxyDetails = poolProxies.map(function (p) {
+          var pFails = p.fails || 0;
+          if (pFails === 0) healthyCount++;
+          else flakyCount++;
+          if (typeof p.latency === 'number' && p.latency > 0) {
+            totalLatency += p.latency;
+            latencyCount++;
+          }
+          return {
+            url: p.protocol + '://' + p.host + ':' + p.port,
+            protocol: p.protocol,
+            hasAuth: !!p.auth,
+            latencyMs: p.latency,
+            fails: pFails,
+            // healthy: 零失败；flaky: 已失败 1 次（再失败 1 次将被移出代理池）
+            health: pFails === 0 ? 'healthy' : 'flaky',
+            score: Math.round(scoreOfDebug(p) * 100000) / 100000,
+          };
+        });
+
+        // 按评分从高到低排序，评分最高（最低延迟、无失败）的代理排在最前
+        proxyDetails.sort(function (a, b) { return b.score - a.score; });
+
+        return sendJSON({
+          status: 'ok',
+          proxyPool: {
+            enabled: config.proxy.enabled,
+            isUpdating: globalProxyState.isUpdating,
+            totalActive: poolProxies.length,
+            healthy: healthyCount,
+            flaky: flakyCount,
+            avgLatencyMs: latencyCount > 0 ? Math.round(totalLatency / latencyCount) : null,
+            lastUpdated: globalProxyState.lastUpdated ? new Date(globalProxyState.lastUpdated).toISOString() : null,
+            ageSeconds: globalProxyState.lastUpdated ? Math.round((nowDebug - globalProxyState.lastUpdated) / 1000) : null,
+            updateIntervalHours: config.proxy.updateIntervalHours,
+            refreshDue: globalProxyState.lastUpdated ? (nowDebug - globalProxyState.lastUpdated >= intervalMsDebug) : true,
+            maxPoolSize: config.proxy.maxPoolSize,
+            fallbackDirect: config.proxy.fallbackDirect,
+            rotationMode: config.proxy.rotationMode,
+            candidatesCache: {
+              size: globalProxyState.candidatesCache ? globalProxyState.candidatesCache.length : 0,
+              ageSeconds: globalProxyState.candidatesCacheTime ? Math.round((nowDebug - globalProxyState.candidatesCacheTime) / 1000) : null,
+            },
+          },
+          proxies: proxyDetails,
         });
       }
 

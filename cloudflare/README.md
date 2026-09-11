@@ -224,11 +224,11 @@ Invalid values are ignored and logged as a `WARN`; the worker keeps the default 
 2. **On-Demand Auto-Update**:
    - Even if you don't configure a Cron Trigger, the Worker automatically checks the timestamp on incoming requests. If 24 hours have passed since the last update, it refreshes the proxy pool in the background using `ctx.waitUntil()` without slowing down user requests!
 3. **Cloudflare KV Persistence (Optional)**:
-   - Bind a KV namespace named `PROXY_KV` to your Worker. Verified proxies will be cached in KV across all edge data center instances!
-4. **Proxy Endpoints**:
-   - `GET /proxies`: View proxy pool status, active proxy count, latencies, and last/next update times.
-   - `POST /proxies/refresh` or `GET /proxies/refresh`: Force an immediate re-fetch and test of the proxy pool.
-   - `GET /health`: Includes live proxy status in the health check JSON.
+   - Bind a KV namespace named `PROXY_KV` to your Worker. Verified proxies will be cached in KV across all edge data center instances! 4. **Proxy Endpoints** (all require a valid API key — same auth as `/v1` endpoints):
+    - `GET /proxies`: View proxy pool status, active proxy count, latencies, and last/next update times.
+    - `POST /proxies/refresh` or `GET /proxies/refresh`: Force an immediate re-fetch and test of the proxy pool.
+    - `GET /debug/proxies`: Detailed pool diagnostics — per-proxy health (`healthy`/`flaky`), latency, fail counts, rotation scores (highest first), and internal state (candidate cache, refresh due, rotation mode). Requires a valid API key (same auth as `/v1` endpoints).
+    - `GET /health`: Includes live proxy status in the health check JSON.
 5. **In-Memory Candidate Caching (Free)**:
    - After fetching from the primary/fallback source, the parsed candidate list is cached **per Worker Isolate** (free, no KV cost).
    - TTL equals `PROXY_UPDATE_INTERVAL_HOURS` (24h default). Within one cycle, refresh attempts reuse the cache and skip both the ProxyScrape and GitHub raw fetches.
@@ -346,6 +346,7 @@ This program has a built-in browser fingerprint rotation system, where each requ
 
 | Model ID | Type | Description |
 |-|-|-|
+| `gemini-3.8-flash` | FAST | Newest all-round model (Gemini 3.8 Flash) |
 | `gemini-3.7-flash` | FAST | Latest all-round model (Gemini 3.7 Flash) |
 | `gemini-3.6-flash` | FAST | All-round model (Gemini 3.6 Flash) |
 | `gemini-3.5-flash` | FAST | Alias for 3.6 Flash |

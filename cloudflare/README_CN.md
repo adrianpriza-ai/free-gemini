@@ -222,11 +222,11 @@ PROXY_ROTATION_MODE=weighted
 2. **按需后台更新**：
    - 即使未在控制台配置 Cron 定时器，Worker 在收到请求时也会比对时间戳。若距离上次更新已超过 24 小时，会自动使用 `ctx.waitUntil()` 在后台静默刷新代理池，完全不阻塞当前客户端请求！
 3. **Cloudflare KV 持久化（可选）**：
-   - 为 Worker 绑定名为 `PROXY_KV` 的 KV 命名空间，测速通过的代理池将持久化保存，并在全球各边缘节点间共享，降低冷启动开销。
-4. **管理端点**：
-   - `GET /proxies`：查看当前代理池状态、存活代理列表、各节点延迟及下次更新时间。
-   - `POST /proxies/refresh` 或 `GET /proxies/refresh`：强制立即重新拉取并测试代理池。
-   - `GET /health`：健康检查响应中已包含代理运行状态。
+   - 为 Worker 绑定名为 `PROXY_KV` 的 KV 命名空间，测速通过的代理池将持久化保存，并在全球各边缘节点间共享，降低冷启动开销。 4. **管理端点**（均需要有效的 API 密钥 —— 与 `/v1` 端点相同的认证方式）：
+    - `GET /proxies`：查看当前代理池状态、存活代理列表、各节点延迟及下次更新时间。
+    - `POST /proxies/refresh` 或 `GET /proxies/refresh`：强制立即重新拉取并测试代理池。
+    - `GET /debug/proxies`：代理池详细诊断 —— 每个代理的健康状态（`healthy`/`flaky`）、延迟、失败计数、轮换评分（按评分降序排列）及内部状态（候选缓存、是否到期刷新、轮换模式）。需要有效的 API 密钥（与 `/v1` 端点相同的认证方式）。
+    - `GET /health`：健康检查响应中已包含代理运行状态。
 5. **Isolate 级候选缓存（免费）**：
    - 解析后的候选代理列表会在 **当前 Worker Isolate 内存** 中缓存，TTL 与 `PROXY_UPDATE_INTERVAL_HOURS` 相同（默认 24 小时）。
    - 在一个刷新周期内重复刷新会直接复用缓存，完全跳过 ProxyScrape 与 GitHub raw 两次上游请求。
@@ -344,6 +344,7 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 
 | 模型 ID | 类型 | 说明 |
 |-|-|-|
+| `gemini-3.8-flash` | FAST | 最新全能模型（Gemini 3.8 Flash） |
 | `gemini-3.7-flash` | FAST | 最新全能模型（Gemini 3.7 Flash） |
 | `gemini-3.6-flash` | FAST | 全能模型（Gemini 3.6 Flash） |
 | `gemini-3.5-flash` | FAST | 3.6 Flash 的别名 |

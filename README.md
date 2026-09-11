@@ -88,6 +88,7 @@ Supports Google native API endpoints:
 
 | Model | Description | Output |
 |-|-|-|
+| `gemini-3.8-flash` | Newest all-around model (Gemini 3.8 Flash) | ~12k chars |
 | `gemini-3.7-flash` | Latest all-around model (Gemini 3.7 Flash) | ~12k chars |
 | `gemini-3.6-flash` | All-around model | ~12k chars |
 | `gemini-3.5-flash` | Alias for gemini-3.6-flash | ~12k chars |

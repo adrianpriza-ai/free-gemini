@@ -78,6 +78,7 @@ gemini
 
 | 模型 | 说明 | 输出长度 |
 |-|-|-|
+| `gemini-3.8-flash` | 最新全能模型（Gemini 3.8 Flash） | ~12k 字符 |
 | `gemini-3.7-flash` | 最新全能模型（Gemini 3.7 Flash） | ~12k 字符 |
 | `gemini-3.6-flash` | 全能模型 | ~12k 字符 |
 | `gemini-3.5-flash` | 3.6 Flash 的别名 | ~12k 字符 |
