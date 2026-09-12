@@ -466,6 +466,7 @@ function getRequestConfig(env, ctx) {
     sapisid: DEFAULT_CONFIG.sapisid,
     logRequests: DEFAULT_CONFIG.logRequests,
     fingerprintJitterMs: DEFAULT_CONFIG.fingerprintJitterMs,
+    outboundProxy: null,
 
     // -- 嵌套对象：rateLimit 需要深拷贝
     // 因为 rateLimit 是一个对象，不能直接赋值（会引用共享）
@@ -670,11 +671,28 @@ function getRequestConfig(env, ctx) {
     if (validModes[requestedMode]) {
       config.proxy.rotationMode = requestedMode;
     } else {
-      log('PROXY_ROTATION_MODE=' + requestedMode + ' 不合法，已忽略（合法值: round-robin / random / best-of-2 / weighted），使用默认 ' + config.proxy.rotationMode, 'WARN', config);
+      log('PROXY_ROTATION_MODE=' + requestedMode + ' 不合法,已忽略(合法值: round-robin / random / best-of-2 / weighted),使用默认 ' + config.proxy.rotationMode, 'WARN', config);
     }
   }
 
-  // 附加环境与上下文引用，便于异步任务与 KV 访问
+  // -- 静态出站代理(HTTPS_PROXY / HTTP_PROXY / ALL_PROXY)
+  //
+  // Netlify Edge Functions 运行在 Deno 2 之上,其全局 fetch() 会原生读取
+  // HTTPS_PROXY / HTTP_PROXY / NO_PROXY 环境变量并自动通过代理发起 CONNECT 隧道。
+  // 因此这里无需手动转发:只要在 Netlify 环境变量中设置 HTTPS_PROXY,直连路径
+  // (geminiFetch → fetch)就会自动走代理。
+  //
+  // 本处仅解析该变量用于状态展示与日志,便于在 /health 中确认代理是否已生效。
+  var rawHttpsProxy = env.HTTPS_PROXY || env.https_proxy ||
+    env.HTTP_PROXY || env.http_proxy ||
+    env.ALL_PROXY || env.all_proxy || null;
+  config.outboundProxy = rawHttpsProxy ? String(rawHttpsProxy).trim() : null;
+  if (config.proxy.enabled && !connect) {
+    log('代理池(ENABLE_PROXY/PROXY_ENABLED)在当前平台不可用:该平台不提供原始 TCP Socket(connect=null),代理池将被忽略。' +
+      (config.outboundProxy ? '检测到 HTTPS_PROXY,将改为使用静态出站代理。' : '如需代理,请设置 HTTPS_PROXY 环境变量。'), 'WARN', config);
+  }
+
+  // 附加环境与上下文引用,便于异步任务与 KV 访问
   config._env = env;
   config._ctx = ctx;
 
@@ -3782,8 +3800,10 @@ async function handleRequest(request, envOrContext, ctx) {
         hasCookie: !!config.cookieString,
         hasSapisid: !!config.sapisid,
         proxy: {
-          enabled: config.proxy.enabled,
-          mode: config.proxy.enabled ? 'pool' : 'direct',
+          enabled: config.proxy.enabled && !!connect,
+          poolSupported: !!connect,
+          mode: (config.proxy.enabled && !!connect) ? 'pool' : (config.outboundProxy ? 'outbound' : 'direct'),
+          outboundProxy: config.outboundProxy ? '(set)' : null,
         },
       });
     }
