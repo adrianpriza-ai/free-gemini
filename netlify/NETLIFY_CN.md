@@ -47,11 +47,12 @@
 | `GEMINI_BL` | String | Gemini Web 前端构建标签。 | 内置最新版 |
 | `RATE_LIMIT_MAX` | Number | 单 IP 窗口期内最大允许请求数。 | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | 限流时间窗口（秒）。 | `60` |
+| `ENABLE_PROXY` | String | 在支持原始 TCP Socket 的平台（如 Cloudflare Workers）启用轮换式**代理池**。**Netlify Edge 不支持**（无 TCP Socket API）——设置了也不生效，请求时会在日志中输出 `WARN` 告警。请改用下方的 `HTTPS_PROXY`。 | `false` |
 | `HTTPS_PROXY` | String | 静态出站代理地址（如 `http://user:pass@proxy:port`）。Netlify Edge 运行于 Deno，其 `fetch()` 会原生读取 `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`，直连请求会自动经代理隧道发出。`HTTP_PROXY` 与 `ALL_PROXY` 同样生效。 | 直连 |
 
 > 💡 **多 Cookie 轮换**：支持多个 Cookie 轮换，用竖线 `|` 分隔即可，例如：`cookie1| cookie2| cookie3`。
 
-> ⚠️ **Netlify 代理说明**：Netlify Edge Functions **不提供原始 TCP Socket**（`cloudflare:sockets`），因此轮换式**代理池**（`ENABLE_PROXY`/`PROXY_ENABLED`）**在 Netlify 上不受支持**，会被忽略并在日志中告警。如需在 Netlify 走代理，请设置 **`HTTPS_PROXY`**。`/health` 端点的 `proxy.mode` 会显示当前模式（`direct`、`outbound` 或 `pool`）。
+> ⚠️ **Netlify 代理说明**：Netlify Edge Functions **不提供原始 TCP Socket**（`cloudflare:sockets`），因此轮换式**代理池**（`ENABLE_PROXY`/`PROXY_ENABLED`）**在 Netlify 上不受支持**，会被忽略并在日志中输出 `WARN` 告警。如需在 Netlify 走代理，请设置 **`HTTPS_PROXY`**（Deno 的 `fetch()` 会自动经其隧道转发）。`/health` 端点的 `proxy.mode` 会显示实际生效模式（`direct`、`outbound` 或 `pool`）。
 
 ---
 
@@ -80,9 +81,17 @@ curl https://your-app-name.netlify.app/health
   ],
   "defaultModel": "gemini-3.6-flash",
   "hasCookie": false,
-  "hasSapisid": false
+  "hasSapisid": false,
+  "proxy": {
+    "mode": "direct",
+    "enabled": false,
+    "poolSupported": false,
+    "outboundProxy": null
+  }
 }
 ```
+
+`proxy` 块反映实际出站模式：`direct`（默认）、`outbound`（静态 `HTTPS_PROXY` 生效中）或 `pool`（轮换代理池——仅 Cloudflare Workers 支持）。注意 Netlify Edge 上 `poolSupported` 恒为 `false`，因此仅设置 `ENABLE_PROXY=true` 无法把模式切换为 `pool`；如需代理请设置 `HTTPS_PROXY` 以获得 `"mode": "outbound"`。
 
 ---
 

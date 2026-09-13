@@ -688,8 +688,16 @@ function getRequestConfig(env, ctx) {
     env.ALL_PROXY || env.all_proxy || null;
   config.outboundProxy = rawHttpsProxy ? String(rawHttpsProxy).trim() : null;
   if (config.proxy.enabled && !connect) {
-    log('代理池(ENABLE_PROXY/PROXY_ENABLED)在当前平台不可用:该平台不提供原始 TCP Socket(connect=null),代理池将被忽略。' +
-      (config.outboundProxy ? '检测到 HTTPS_PROXY,将改为使用静态出站代理。' : '如需代理,请设置 HTTPS_PROXY 环境变量。'), 'WARN', config);
+    // 当前平台没有原始 TCP Socket（如 Netlify Edge Functions），代理池(pool)无法工作：
+    // 1. 关闭 autoTest，避免刷新代理池时对每个代理发起注定失败的 TCP 握手测试
+    // 2. 输出告警，明确说明期望模式与实际生效模式
+    // The platform has no raw TCP sockets (e.g. Netlify Edge Functions), so the
+    // rotating proxy pool cannot work: disable the pointless per-proxy TCP
+    // handshake auto-tests and warn about the effective outbound mode instead.
+    config.proxy.autoTest = false;
+    log('ENABLE_PROXY=true 已配置,但当前平台不提供原始 TCP Socket(connect=null),代理池(pool)不可用。' +
+      '实际出站模式: ' + (config.outboundProxy ? 'outbound(静态出站代理 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY)' : 'direct(直连)') + '。' +
+      (config.outboundProxy ? '' : '如需在 Netlify 上走代理,请设置 HTTPS_PROXY 环境变量(Deno fetch 原生支持)。'), 'WARN', config);
   }
 
   // 附加环境与上下文引用,便于异步任务与 KV 访问
@@ -3800,9 +3808,23 @@ async function handleRequest(request, envOrContext, ctx) {
         hasCookie: !!config.cookieString,
         hasSapisid: !!config.sapisid,
         proxy: {
-          enabled: config.proxy.enabled && !!connect,
-          poolSupported: !!connect,
+          // 实际生效模式:
+          //   pool     = 代理池轮换（需要平台原始 TCP Socket，如 Cloudflare Workers）
+          //   outbound = 静态出站代理（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，Deno fetch 原生支持）
+          //   direct   = 直连（默认）
+          // Effective mode:
+          //   pool = rotating proxy pool (requires raw TCP sockets, e.g. Cloudflare Workers)
+          //   outbound = static outbound proxy via HTTPS_PROXY/HTTP_PROXY/ALL_PROXY (native in Deno fetch)
+          //   direct = direct connection (default)
           mode: (config.proxy.enabled && !!connect) ? 'pool' : (config.outboundProxy ? 'outbound' : 'direct'),
+          // 是否有任一代理实际生效（等价于 mode !== 'direct'，便于监控判断）
+          // Whether any proxy is actually in effect (equivalent to mode !== 'direct')
+          enabled: (config.proxy.enabled && !!connect) || !!config.outboundProxy,
+          // 当前平台是否支持原始 TCP Socket（代理池的必要条件；Netlify Edge 上恒为 false）
+          // Whether this platform supports raw TCP sockets (required for the pool; always false on Netlify Edge)
+          poolSupported: !!connect,
+          // 配置的静态出站代理（隐藏具体值，只报告是否设置）
+          // Configured static outbound proxy (value hidden, only reported as set/unset)
           outboundProxy: config.outboundProxy ? '(set)' : null,
         },
       });

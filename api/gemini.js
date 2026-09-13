@@ -1,5 +1,5 @@
-// Netlify Edge Functions runtime environment
-// connect is null on Netlify; Netlify Edge uses direct global fetch to gemini.google.com
+// Vercel Edge Functions runtime environment
+// connect is null on Vercel; Vercel Edge uses direct global fetch to gemini.google.com
 var connect = null;
 
 // 🔒 默认配置 - 仅作为只读模板
@@ -106,9 +106,9 @@ var DEFAULT_CONFIG = {
   // 配合 User-Agent 轮换使用效果更佳
   fingerprintJitterMs: 1500,
 
-  // -- 代理池配置（Netlify 支持直连，默认使用直连）
+  // -- 代理池配置（Vercel 支持直连，默认使用直连）
   proxy: {
-    // 是否启用代理池（Netlify 边缘网络支持直连 gemini.google.com，默认关闭代理池走直连）
+    // 是否启用代理池（Vercel 边缘网络支持直连 gemini.google.com，默认关闭代理池走直连）
     enabled: false,
     // 代理源 URL（默认使用 ProxyScrape 200ms timeout API，体积小、速度快、质量高）
     sourceUrl: 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text&timeout=200',
@@ -677,27 +677,27 @@ function getRequestConfig(env, ctx) {
 
   // -- 静态出站代理(HTTPS_PROXY / HTTP_PROXY / ALL_PROXY)
   //
-  // Netlify Edge Functions 运行在 Deno 2 之上,其全局 fetch() 会原生读取
-  // HTTPS_PROXY / HTTP_PROXY / NO_PROXY 环境变量并自动通过代理发起 CONNECT 隧道。
-  // 因此这里无需手动转发:只要在 Netlify 环境变量中设置 HTTPS_PROXY,直连路径
-  // (geminiFetch → fetch)就会自动走代理。
+  // Vercel Edge Runtime 的全局 fetch() 不会像 Deno 那样原生读取
+  // HTTPS_PROXY / HTTP_PROXY / NO_PROXY 环境变量并自动建立 CONNECT 隧道
+  // (Node.js 运行时也不会将其自动应用于全局 fetch)。
   //
-  // 本处仅解析该变量用于状态展示与日志,便于在 /health 中确认代理是否已生效。
+  // 本处仅解析该变量用于状态展示与日志,便于在 /health 中确认是否配置了
+  // 出站代理;注意在 Vercel 上该变量不会自动生效。
   var rawHttpsProxy = env.HTTPS_PROXY || env.https_proxy ||
     env.HTTP_PROXY || env.http_proxy ||
     env.ALL_PROXY || env.all_proxy || null;
   config.outboundProxy = rawHttpsProxy ? String(rawHttpsProxy).trim() : null;
   if (config.proxy.enabled && !connect) {
-    // 当前平台没有原始 TCP Socket（如 Netlify Edge Functions），代理池(pool)无法工作：
+    // 当前平台没有原始 TCP Socket（如 Vercel Edge Functions），代理池(pool)无法工作：
     // 1. 关闭 autoTest，避免刷新代理池时对每个代理发起注定失败的 TCP 握手测试
     // 2. 输出告警，明确说明期望模式与实际生效模式
-    // The platform has no raw TCP sockets (e.g. Netlify Edge Functions), so the
+    // The platform has no raw TCP sockets (e.g. Vercel Edge Functions), so the
     // rotating proxy pool cannot work: disable the pointless per-proxy TCP
     // handshake auto-tests and warn about the effective outbound mode instead.
     config.proxy.autoTest = false;
     log('ENABLE_PROXY=true 已配置,但当前平台不提供原始 TCP Socket(connect=null),代理池(pool)不可用。' +
       '实际出站模式: ' + (config.outboundProxy ? 'outbound(静态出站代理 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY)' : 'direct(直连)') + '。' +
-      (config.outboundProxy ? '' : '如需在 Netlify 上走代理,请设置 HTTPS_PROXY 环境变量(Deno fetch 原生支持)。'), 'WARN', config);
+      (config.outboundProxy ? '' : '注意:Vercel 的 fetch() 不会自动应用 HTTPS_PROXY,如需代理请选用支持 TCP Socket 的平台(如 Cloudflare Workers)。'), 'WARN', config);
   }
 
   // 附加环境与上下文引用,便于异步任务与 KV 访问
@@ -2299,17 +2299,17 @@ async function geminiFetch(url, options, config) {
  * @throws {Error} 所有重试失败后抛出最后的错误
  */
 async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
-  // ⏱️ 响应头截止时间（重要：Netlify Edge 平台限制）
+  // ⏱️ 响应头截止时间（重要：Vercel Edge 平台限制）
   //
-  // Netlify Edge Functions 要求响应头必须在 40 秒内发出，否则平台会
-  // 中断请求并返回通用的 "Error - Request ID: ..." 错误页。
+  // Vercel Edge Functions 要求响应头必须在 25 秒内开始发出，否则平台会
+  // 中止函数并返回 FUNCTION_INVOCATION_TIMEOUT (504) 错误。
   // 旧版重试逻辑（3 次 × 28s 超时 + 指数退避 + Retry-After 等待）
   // 最坏情况可达 90+ 秒，必然触发该平台错误。
   //
-  // 这里为非流式路径设定 30 秒硬截止：所有重试与等待都必须在此之前
-  // 完成并拿到上游响应（响应体的传输不受此限制，只约束"首字节/响应头"）。
-  // 流式路径的响应头立即可用，不受此限制。
-  var PRERESPONSE_DEADLINE_MS = 30 * 1000;
+  // 这里为非流式路径设定 22 秒硬截止（预留 ~3 秒余量）：所有重试与等待
+  // 都必须在此之前完成并拿到上游响应（响应体的传输不受此限制，只约束
+  // "首字节/响应头"）。流式路径的响应头立即可用，不受此限制。
+  var PRERESPONSE_DEADLINE_MS = 22 * 1000;
   var deadline = Date.now() + PRERESPONSE_DEADLINE_MS;
 
   // 🎭 请求前添加随机微小延迟（模拟人类操作间隔）
@@ -2331,10 +2331,10 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
   // 重试循环
   for (var attempt = 0; attempt < config.retryAttempts; attempt++) {
     // ⏱️ 截止时间检查：剩余时间不足以完成一次有意义的请求时停止重试，
-    // 避免总耗时越过 Netlify 的 40 秒响应头限制（导致 "Error - Request ID" 页面）
+    // 避免总耗时越过 Vercel 的 25 秒响应头限制（导致 FUNCTION_INVOCATION_TIMEOUT）
     var remainingMs = deadline - Date.now();
     if (remainingMs < 3000) {
-      log('非流式请求响应截止时间（30s）将耗尽，停止重试以保住响应头时限', 'WARN', config);
+      log('非流式请求响应截止时间（22s）将耗尽，停止重试以保住响应头时限', 'WARN', config);
       break;
     }
 
@@ -2384,7 +2384,7 @@ async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
         var retryAfter = parseInt(response.headers.get('Retry-After') || '5', 10);
         log('收到 429 限流，等待 ' + retryAfter + ' 秒后重试...', 'WARN', config);
         if (attempt < config.retryAttempts - 1) {
-          // ⏱️ 等待时间封顶：不得超过响应截止时间的剩余量，防止越过 Netlify 40s 限制
+          // ⏱️ 等待时间封顶：不得超过响应截止时间的剩余量，防止越过 Vercel 25s 限制
           var waitMs = Math.min(retryAfter * 1000, deadline - Date.now());
           if (waitMs < 1000) {
             throw new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
@@ -3729,7 +3729,7 @@ async function handleGoogleAPI(request, body, stream, config) {
   }
 }
 
-// 🚀 主入口 - 支持 Netlify Edge Functions、Netlify Functions 与 Cloudflare Workers
+// 🚀 主入口 - 支持 Vercel Edge Functions、Netlify Edge/Functions 与 Cloudflare Workers
 
 async function handleRequest(request, envOrContext, ctx) {
 
@@ -3789,9 +3789,11 @@ async function handleRequest(request, envOrContext, ctx) {
   if (method === 'GET') {
     // -- 健康检查端点
     if (path === '/' || path === '/health') {
-      var platform = 'Netlify Edge Functions';
+      var platform = 'Vercel Edge Functions';
       if (typeof WebSocketPair !== 'undefined' || (env && env.PROXY_KV)) {
         platform = 'Cloudflare Workers';
+      } else if (typeof EdgeRuntime === 'string' || (typeof process !== 'undefined' && process.env && process.env.VERCEL)) {
+        platform = 'Vercel Edge Functions';
       } else if (typeof Netlify !== 'undefined' || request.headers.get('x-nf-client-connection-ip')) {
         platform = 'Netlify Edge Functions';
       } else if (typeof process !== 'undefined' && process.env && process.env.NETLIFY) {
@@ -3820,8 +3822,8 @@ async function handleRequest(request, envOrContext, ctx) {
           // 是否有任一代理实际生效（等价于 mode !== 'direct'，便于监控判断）
           // Whether any proxy is actually in effect (equivalent to mode !== 'direct')
           enabled: (config.proxy.enabled && !!connect) || !!config.outboundProxy,
-          // 当前平台是否支持原始 TCP Socket（代理池的必要条件；Netlify Edge 上恒为 false）
-          // Whether this platform supports raw TCP sockets (required for the pool; always false on Netlify Edge)
+          // 当前平台是否支持原始 TCP Socket（代理池的必要条件；Vercel/Netlify Edge 上恒为 false）
+          // Whether this platform supports raw TCP sockets (required for the pool; always false on Vercel/Netlify Edge)
           poolSupported: !!connect,
           // 配置的静态出站代理（隐藏具体值，只报告是否设置）
           // Configured static outbound proxy (value hidden, only reported as set/unset)
@@ -4053,11 +4055,10 @@ async function handleRequest(request, envOrContext, ctx) {
     return sendJSON({ error: { message: 'method not allowed' } }, 405);
 }
 
-// 🚀 导出 Netlify Edge Functions & Netlify Functions 标准处理器
+// 🚀 导出 Vercel Edge Function 标准处理器
 //
 // 🛡️ 顶层兜底异常处理
-// Netlify 对未捕获异常的处理方式是：丢弃函数响应，返回通用的
-// "Error - Request ID: ..." 页面（无 CORS 头、非 JSON、客户端无法解析）。
+// Vercel 对未捕获异常会返回 500 FUNCTION_INVOCATION_FAILED（非 JSON、客户端无法解析）。
 // 这里捕获所有未被上层捕获的异常，转换为结构化的 500 JSON 响应。
 export default async function handler(request, context) {
   try {
@@ -4089,7 +4090,8 @@ handler.scheduled = async function (event, env, ctx) {
   }
 };
 
-// Netlify 路由配置：全路径拦截
+// Vercel 路由配置：使用 Edge Runtime（全球边缘节点 + 真 SSE 流式）
+// Vercel route config: run on the Edge runtime (global edge network + true SSE streaming)
 export const config = {
-  path: "/*"
+  runtime: 'edge'
 };

@@ -47,9 +47,10 @@ Configure these in Netlify: **Site configuration** → **Environment variables**
 | `GEMINI_BL` | String | Gemini web build label (e.g. `boq_assistant-bard-web-server_...`). | built-in latest |
 | `RATE_LIMIT_MAX` | Number | Max requests per IP in the window. | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | Rate limit window in seconds. | `60` |
+| `ENABLE_PROXY` | String | Enables the rotating **proxy pool** on platforms with raw TCP sockets (e.g. Cloudflare Workers). **Not supported on Netlify Edge** (no TCP socket API) — setting it has no effect; a `WARN` is logged at request time. Use `HTTPS_PROXY` below instead. | `false` |
 | `HTTPS_PROXY` | String | Static outbound proxy URL (e.g. `http://user:pass@proxy:port`). Netlify Edge runs on Deno, whose `fetch()` reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` natively, so direct requests are tunneled automatically. `HTTP_PROXY` and `ALL_PROXY` are also honored. | none (direct) |
 
-> ⚠️ **Proxy support on Netlify**: Netlify Edge Functions do **not** provide raw TCP sockets (`cloudflare:sockets`), so the rotating **proxy pool** (`ENABLE_PROXY`/`PROXY_ENABLED`) is **not supported** on Netlify and will be ignored with a warning in the logs. To route traffic through a proxy on Netlify, set **`HTTPS_PROXY`** instead. The `/health` endpoint reports which mode is active under `proxy.mode` (`direct`, `outbound`, or `pool`).
+> ⚠️ **Proxy support on Netlify**: Netlify Edge Functions do **not** provide raw TCP sockets (`cloudflare:sockets`), so the rotating **proxy pool** (`ENABLE_PROXY`/`PROXY_ENABLED`) is **not supported** on Netlify and is ignored with a `WARN` in the logs. To route traffic through a proxy on Netlify, set **`HTTPS_PROXY`** instead (Deno's `fetch()` tunnels through it automatically). The `/health` endpoint reports the effective mode under `proxy.mode` (`direct`, `outbound`, or `pool`).
 
 > 💡 **Tip for Multiple Cookies**: You can rotate between multiple Google accounts by separating cookies with a pipe character (`|`), e.g. `cookie_account_1| cookie_account_2`.
 
@@ -80,9 +81,17 @@ Expected response:
   ],
   "defaultModel": "gemini-3.6-flash",
   "hasCookie": false,
-  "hasSapisid": false
+  "hasSapisid": false,
+  "proxy": {
+    "mode": "direct",
+    "enabled": false,
+    "poolSupported": false,
+    "outboundProxy": null
+  }
 }
 ```
+
+The `proxy` block reflects the actual outbound mode: `direct` (default), `outbound` (static `HTTPS_PROXY` in effect), or `pool` (rotating proxy pool — Cloudflare Workers only). Note that `poolSupported` is always `false` on Netlify Edge, so `ENABLE_PROXY=true` alone can never switch the mode to `pool` here; use `HTTPS_PROXY` to get `"mode": "outbound"`.
 
 ---
 
