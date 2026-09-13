@@ -3761,6 +3761,31 @@ async function handleRequest(request, envOrContext, ctx) {
   var path = requestUrl.pathname;
   var method = request.method;
 
+  // 🔀 Vercel 兼容：URL 重写后的内部路径还原
+  //
+  // vercel.json 通过 rewrites 将所有路径（/v1/...、/health 等）路由到
+  // api/gemini。当 Vercel 在函数内暴露重写后的内部 URL（/api/gemini）时，
+  // 原始公共路径会通过 x-matched-path 请求头传递。若存在该头且函数看到的
+  // 是内部路径，则还原为原始路径，确保路由逻辑在两种 URL 约定下都能工作。
+  //
+  // Vercel compatibility: recover the original public path when the platform
+  // exposes the rewritten internal URL inside the function. The original path
+  // is carried in the x-matched-path header under that convention.
+  var matchedPath = request.headers.get('x-matched-path');
+  if (matchedPath && path !== matchedPath) {
+    try {
+      var matchedUrl = new URL(matchedPath, requestUrl.origin);
+      if (matchedUrl.pathname !== path) {
+        log('Vercel rewrite detected: internal path ' + path + ' -> original path ' + matchedUrl.pathname, 'INFO', config);
+        path = matchedUrl.pathname;
+      }
+    } catch (e) { /* 无效的 x-matched-path 值，忽略并沿用内部路径 */ }
+  }
+  // 规范入口：/api/gemini（直接访问函数的 canonical 路径）视为健康检查
+  if (path === '/api/gemini' || path === '/api/gemini/') {
+    path = '/health';
+  }
+
   // 第三步：速率限制检查（支持 Cloudflare、Netlify 及标准代理头）
   var clientIP = request.headers.get('CF-Connecting-IP') ||
                  request.headers.get('x-nf-client-connection-ip') ||

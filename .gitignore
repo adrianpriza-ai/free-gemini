@@ -54,3 +54,6 @@ Thumbs.db
 *.tmp
 *.temp
 
+# Vercel CLI local state
+.vercel/
+

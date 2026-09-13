@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/api/gemini/:path*", "destination": "/api/gemini" },
+    { "source": "/((?!api/).*)", "destination": "/api/gemini" }
+  ]
+}

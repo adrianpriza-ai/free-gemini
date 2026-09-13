@@ -1,0 +1,5 @@
+# Vercel requires an output directory ("public") to exist for API-only
+# deployments with no static frontend. This placeholder keeps the directory
+# present; all traffic is rewritten to the edge function in api/gemini.js
+# (see vercel.json). Do not add public/index.html — a static file at "/"
+# would shadow the rewrite and break the / and /health endpoints.

@@ -4,7 +4,9 @@
 
 Run Gemini Web2API on Vercel Edge Functions for true SSE streaming on Vercel's global edge network — zero config, no server to maintain.
 
-> 📁 The endpoint lives at [`api/gemini.js`](../api/gemini.js), a direct port of the Cloudflare worker and the Netlify edge function. Vercel auto-detects any file in `api/` as a serverless function, and the `export const config = { runtime: 'edge' }` at the bottom of the file runs it on the Edge runtime.
+> 📁 The endpoint lives at [`api/gemini.js`](../api/gemini.js), a direct port of the Cloudflare worker and the Netlify edge function. [`vercel.json`](../vercel.json) routes every path (e.g. `/v1/chat/completions`, `/health`) to this single function via rewrites, and the `export const config = { runtime: 'edge' }` at the bottom of the file runs it on the Edge runtime.
+>
+> ℹ️ **Why `vercel.json` + `public/`?** This repo is API-only (no static frontend). Vercel's "Other" framework preset expects an output directory named `public/` — without it the build fails with `No Output Directory named "public" found`. The empty `public/.gitkeep` satisfies that, and the rewrite rules make the function reachable at the same paths as the Netlify/Cloudflare deployments.
 
 ---
 
@@ -29,7 +31,7 @@ Run Gemini Web2API on Vercel Edge Functions for true SSE streaming on Vercel's g
    - **Build Command**: (leave empty)
    - **Output Directory**: (leave empty)
    - **Install Command**: (leave empty)
-5. Click **Deploy**. Vercel detects `api/gemini.js` automatically — no `vercel.json` needed.
+5. Click **Deploy**. The repo's `vercel.json` sets the output directory (`public/`) and rewrites all paths to `api/gemini` — no build settings needed.
 
 ### Option 3: Vercel CLI
 
@@ -46,7 +48,7 @@ vercel --prod   # production deployment
 Configure these in Vercel: **Project Settings** → **Environment Variables** (or `vercel env add`).
 
 | Variable | Type | Description | Default |
-|---|---|---|---|
+|-|-|-|-|
 | `API_KEY` / `API_KEYS` | String | Authorized client API keys (comma or `\|` separated). | `sk-gemini` |
 | `COOKIE_STRING` | String | Google account cookies (`__Secure-1PSID`, etc.) for authenticated access. | `null` |
 | `SAPISID` | String | SAPISID value (auto-extracted from `COOKIE_STRING` if omitted). | `null` |
@@ -67,7 +69,7 @@ Configure these in Vercel: **Project Settings** → **Environment Variables** (o
 ## 📏 Platform Limits (Edge Runtime)
 
 | Limit | Value | How this deployment handles it |
-|---|---|---|
+|-|-|-|
 | First response byte | Must start within **25s** | Non-streaming requests cap all retries at a **22s** pre-response deadline (3s safety margin). Streaming responses send headers immediately, so they are unaffected. |
 | Total streaming duration | Up to **300s** | Plenty for SSE token streaming. |
 | Request/response body | 4.5 MB | Long conversations may hit this; keep payloads reasonable. |
@@ -119,7 +121,7 @@ On Vercel, `poolSupported` is always `false` and `proxy.mode` is always `direct`
 ### NextChat / ChatGPT-Next-Web
 
 | Field | Value |
-|---|---|
+|-|-|
 | Interface Type | OpenAI |
 | Endpoint / Base URL | `https://your-app-name.vercel.app/v1` |
 | API Key | `sk-gemini` (or your configured `API_KEY`) |
@@ -128,7 +130,7 @@ On Vercel, `poolSupported` is always `false` and `proxy.mode` is always `direct`
 ### Cherry Studio / ChatBox
 
 | Field | Value |
-|---|---|
+|-|-|
 | Provider | OpenAI |
 | API Base URL | `https://your-app-name.vercel.app/v1` |
 | API Key | `sk-gemini` |
@@ -155,14 +157,23 @@ You can run and test the Vercel Edge Function locally using the Vercel CLI:
 
 ```bash
 npm install -g vercel
+vercel login   # first time only
 vercel dev
 ```
 
-The local server will start at `http://localhost:3000`.
+The local server will start at `http://localhost:3000`, with the same rewrite routing as production. (The CLI requires a free Vercel account even for local dev.)
 
 ---
 
 ## 🚨 Troubleshooting
+
+### `No Output Directory named "public" found after the Build completed`
+
+This repo ships a `vercel.json` with `"outputDirectory": "public"` and a `public/.gitkeep`
+placeholder, so this should not happen on a fresh deploy. If you hit it anyway:
+
+- Make sure `vercel.json` and `public/.gitkeep` are committed and pushed.
+- Or set **Output Directory** to `public` under Project Settings → Build & Output Settings.
 
 ### `FUNCTION_INVOCATION_TIMEOUT` (504)
 
@@ -171,7 +182,7 @@ invocation is terminated with a 504. Non-streaming requests now cap all retries 
 pre-response deadline. If you still see this:
 
 | Cause | Fix |
-|---|---|
+|-|-|
 | Gemini upstream unreachable or slow | Lower `REQUEST_TIMEOUT_SEC` (e.g. `10`) so a single attempt cannot consume the deadline. |
 | `GEMINI_BL` build label expired (upstream returns 405) | Open `https://gemini.google.com/app`, press F12 → Network tab, search any request URL for `boq_assistant`, copy the newest label into the `GEMINI_BL` environment variable. |
 | Rate limited by Google (upstream returns 429) | Add a valid `COOKIE_STRING` (+ `SAPISID`) environment variable, or lower request frequency. |

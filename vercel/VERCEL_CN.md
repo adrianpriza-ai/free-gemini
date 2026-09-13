@@ -4,7 +4,9 @@
 
 将 Gemini Web2API 部署到 Vercel Edge Functions：在 Vercel 全球边缘节点上实现打字机式 SSE 流式输出——零配置，无需自己维护服务器。
 
-> 📁 端点位于 [`api/gemini.js`](../api/gemini.js)，由 Cloudflare Worker 与 Netlify Edge Function 直接移植而来。Vercel 会自动把 `api/` 目录下的文件识别为 Serverless Function，文件末尾的 `export const config = { runtime: 'edge' }` 使其运行在 Edge Runtime 上。
+> 📁 端点位于 [`api/gemini.js`](../api/gemini.js)，由 Cloudflare Worker 与 Netlify Edge Function 直接移植而来。[`vercel.json`](../vercel.json) 通过重写规则将所有路径（如 `/v1/chat/completions`、`/health`）路由到这一个函数，文件末尾的 `export const config = { runtime: 'edge' }` 使其运行在 Edge Runtime 上。
+>
+> ℹ️ **为什么需要 `vercel.json` 和 `public/`？** 本仓库是纯 API 项目（无静态前端）。Vercel 的 "Other" 框架预设要求存在名为 `public/` 的输出目录——否则构建会报 `No Output Directory named "public" found`。空占位文件 `public/.gitkeep` 就是为此而设；重写规则则让函数可经由与 Netlify/Cloudflare 部署完全相同的路径访问。
 
 ---
 
@@ -29,7 +31,7 @@
    - **Build Command**：留空
    - **Output Directory**：留空
    - **Install Command**：留空
-5. 点击 **Deploy**。Vercel 会自动识别 `api/gemini.js`，无需 `vercel.json`。
+5. 点击 **Deploy**。仓库自带的 `vercel.json` 已设置输出目录（`public/`）并将所有路径重写到 `api/gemini`，无需额外构建设置。
 
 ### 方案 3：Vercel CLI
 
@@ -46,7 +48,7 @@ vercel --prod   # 生产部署
 在 Vercel 中设置：**Project Settings** → **Environment Variables**（或使用 `vercel env add`）。
 
 | 环境变量 | 类型 | 说明 | 默认值 |
-|---|---|---|---|
+|-|-|-|-|
 | `API_KEY` / `API_KEYS` | String | 客户端请求鉴权密钥（支持逗号或 `\|` 分隔多个）。 | `sk-gemini` |
 | `COOKIE_STRING` | String | Google 账号 Cookie（含 `__Secure-1PSID` 等），用于高频与 Pro 模型。 | `null` |
 | `SAPISID` | String | Google SAPISID 认证值（若未填会自动从 Cookie 中提取）。 | `null` |
@@ -67,7 +69,7 @@ vercel --prod   # 生产部署
 ## 📏 平台限制（Edge Runtime）
 
 | 限制 | 数值 | 本部署的应对方式 |
-|---|---|---|
+|-|-|-|
 | 响应首字节 | 必须在 **25 秒**内开始发送 | 非流式请求的重试总耗时被限制在 **22 秒**响应截止内（预留 3 秒余量）。流式响应立即发送响应头，不受影响。 |
 | 流式总时长 | 最长 **300 秒** | 对 SSE 流式输出绰绰有余。 |
 | 请求/响应体 | 4.5 MB | 超长对话可能触顶，请控制消息长度。 |
@@ -119,7 +121,7 @@ Vercel 上 `poolSupported` 恒为 `false`，`proxy.mode` 恒为 `direct`——�
 ### NextChat (ChatGPT-Next-Web)
 
 | 配置项 | 推荐值 |
-|---|---|
+|-|-|
 | 接口类型 | OpenAI |
 | 接口地址 | `https://your-app-name.vercel.app/v1` |
 | API Key | `sk-gemini`（或您自定义的 key） |
@@ -128,7 +130,7 @@ Vercel 上 `poolSupported` 恒为 `false`，`proxy.mode` 恒为 `direct`——�
 ### Cherry Studio / ChatBox
 
 | 配置项 | 推荐值 |
-|---|---|
+|-|-|
 | 提供商 | OpenAI |
 | API Base URL | `https://your-app-name.vercel.app/v1` |
 | API Key | `sk-gemini` |
@@ -155,14 +157,22 @@ curl https://your-app-name.vercel.app/v1/chat/completions \
 
 ```bash
 npm install -g vercel
+vercel login   # 仅首次需要
 vercel dev
 ```
 
-本地服务默认监听在 `http://localhost:3000`。
+本地服务默认监听在 `http://localhost:3000`，路由重写与生产环境一致。（即使本地开发，CLI 也需要登录免费的 Vercel 账号。）
 
 ---
 
 ## 🚨 故障排查
+
+### `No Output Directory named "public" found after the Build completed`
+
+本仓库已通过 `vercel.json`（`"outputDirectory": "public"`）和 `public/.gitkeep` 占位文件解决此问题，正常部署不应再出现。若仍然遇到：
+
+- 确认 `vercel.json` 与 `public/.gitkeep` 已提交并推送。
+- 或在 Project Settings → Build & Output Settings 中将 **Output Directory** 设为 `public`。
 
 ### `FUNCTION_INVOCATION_TIMEOUT` (504)
 
@@ -170,7 +180,7 @@ Vercel Edge Functions 必须**在 25 秒内开始发送响应**，否则该次�
 504。非流式请求的重试总耗时现在限制在 22 秒响应截止内。如果仍然出现：
 
 | 原因 | 解决办法 |
-|---|---|
+|-|-|
 | 上游 Gemini 不可达或响应慢 | 调低 `REQUEST_TIMEOUT_SEC`（如 `10`），确保单次尝试不会耗尽截止时间。 |
 | `GEMINI_BL` 构建标签过期（上游返回 405） | 打开 `https://gemini.google.com/app`，按 F12 → Network 标签，在任意请求 URL 中搜索 `boq_assistant`，把最新标签填入 `GEMINI_BL` 环境变量。 |
 | 被 Google 限流（上游返回 429） | 配置有效的 `COOKIE_STRING`（及 `SAPISID`）环境变量，或降低请求频率。 |
