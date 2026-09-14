@@ -4,7 +4,7 @@
 
 Run Gemini Web2API on Vercel Edge Functions for true SSE streaming on Vercel's global edge network — zero config, no server to maintain.
 
-> 📁 The endpoint lives at [`api/gemini.js`](../api/gemini.js), a direct port of the Cloudflare worker and the Netlify edge function. [`vercel.json`](../vercel.json) routes every path (e.g. `/v1/chat/completions`, `/health`) to this single function via rewrites, and the `export const config = { runtime: 'edge' }` at the bottom of the file runs it on the Edge runtime.
+> 📁 The endpoint lives at [`api/gemini.js`](../api/gemini.js), a thin Vercel adapter over the shared core in [`src/`](../src/) (the same core used by the Cloudflare worker and the Netlify functions). [`vercel.json`](../vercel.json) routes every path (e.g. `/v1/chat/completions`, `/health`) to this single function via rewrites, and the `export const config = { runtime: 'edge' }` at the bottom of the file runs it on the Edge runtime.
 >
 > ℹ️ **Why `vercel.json` + `public/`?** This repo is API-only (no static frontend). Vercel's "Other" framework preset expects an output directory named `public/` — without it the build fails with `No Output Directory named "public" found`. The empty `public/.gitkeep` satisfies that, and the rewrite rules make the function reachable at the same paths as the Netlify/Cloudflare deployments.
 

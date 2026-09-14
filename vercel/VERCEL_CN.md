@@ -4,7 +4,7 @@
 
 将 Gemini Web2API 部署到 Vercel Edge Functions：在 Vercel 全球边缘节点上实现打字机式 SSE 流式输出——零配置，无需自己维护服务器。
 
-> 📁 端点位于 [`api/gemini.js`](../api/gemini.js)，由 Cloudflare Worker 与 Netlify Edge Function 直接移植而来。[`vercel.json`](../vercel.json) 通过重写规则将所有路径（如 `/v1/chat/completions`、`/health`）路由到这一个函数，文件末尾的 `export const config = { runtime: 'edge' }` 使其运行在 Edge Runtime 上。
+> 📁 端点位于 [`api/gemini.js`](../api/gemini.js)，是共享核心 [`src/`](../src/) 之上的 Vercel 薄适配器（Cloudflare Worker 与 Netlify Functions 也复用同一核心）。[`vercel.json`](../vercel.json) 通过重写规则将所有路径（如 `/v1/chat/completions`、`/health`）路由到这一个函数，文件末尾的 `export const config = { runtime: 'edge' }` 使其运行在 Edge Runtime 上。
 >
 > ℹ️ **为什么需要 `vercel.json` 和 `public/`？** 本仓库是纯 API 项目（无静态前端）。Vercel 的 "Other" 框架预设要求存在名为 `public/` 的输出目录——否则构建会报 `No Output Directory named "public" found`。空占位文件 `public/.gitkeep` 就是为此而设；重写规则则让函数可经由与 Netlify/Cloudflare 部署完全相同的路径访问。
 

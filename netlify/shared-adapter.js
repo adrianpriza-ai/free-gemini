@@ -1,12 +1,14 @@
-// 🚀 Vercel Edge Function 适配器 (Vercel Edge Function adapter)
+// 🚀 Netlify 共享适配器 (Shared Netlify adapter)
 //
-// api/gemini.js 是薄入口，加载 src/ 下的共享核心模块。
-// api/gemini.js is a thin entry that loads the shared core in src/.
+// netlify/functions/gemini.js 与 netlify/edge-functions/gemini.js 是两个完全
+// 相同的薄入口，共同加载 src/ 下的共享核心模块。
+// netlify/functions/gemini.js and netlify/edge-functions/gemini.js are two
+// identical thin entries that load the shared core in src/.
 //
 // 平台特性 / Platform traits:
 //   - 无原始 TCP socket（connect = null）→ 代理池自动降级为直连
-//   - 全局 fetch() 不会像 Deno 那样原生读取 HTTPS_PROXY（不会自动应用静态出站代理）
-//   - 非流式请求响应头截止时间 22s（Vercel Edge 25s 平台限制预留余量）
+//   - Deno fetch 原生读取 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY 静态出站代理
+//   - 非流式请求响应头截止时间 30s（Netlify Edge 40s 平台限制预留余量）
 //   - 默认关闭代理池（边缘网络可直连 gemini.google.com）
 
 import {
@@ -19,11 +21,11 @@ import { handleRequestSafe as run, handleScheduled } from '../src/router.js';
 // 注入平台能力（必须在加载业务模块前完成）
 // Inject platform capabilities (must happen before the core modules are used).
 setProxyPoolDefaultEnabled(false);
-setPreresponseDeadline(22 * 1000);
-setPlatformConnect(null, 'Vercel Edge Functions');
+setPreresponseDeadline(30 * 1000);
+setPlatformConnect(null, 'Netlify Edge Functions');
 
-// 🚀 导出 Vercel Edge Function 标准处理器
-// Vercel 对未捕获异常会返回 500 FUNCTION_INVOCATION_FAILED（非 JSON），
+// 🚀 导出 Netlify 标准处理器
+// Netlify 对未捕获异常会返回通用的 "Error - Request ID: ..." 错误页（非 JSON），
 // handleRequestSafe 会把所有未处理异常转换为结构化的 500 JSON 响应。
 export default async function handler(request, context) {
   return run(request, null, context);
@@ -37,8 +39,7 @@ handler.fetch = async function fetch(request, env, ctx) {
 // 定时任务调度器（在支持的环境下可用）
 handler.scheduled = handleScheduled;
 
-// Vercel 路由配置：使用 Edge Runtime（全球边缘节点 + 真 SSE 流式）
-// Vercel route config: run on the Edge runtime (global edge network + true SSE streaming)
+// Netlify 路由配置：全路径拦截
 export const config = {
-  runtime: 'edge',
+  path: '/*',
 };
