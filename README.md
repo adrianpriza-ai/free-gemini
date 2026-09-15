@@ -6,6 +6,8 @@
 
 [中文文档](README_CN.md)
 
+![Tests](https://github.com/adrianpriza-ai/free-gemini/actions/workflows/tests.yml/badge.svg)
+
 Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, cross-platform, single file.
 
 > ☁️ **Prefer serverless?** Deploy the same API for free with zero server maintenance:

@@ -16,7 +16,7 @@ process.env.VERCEL = '1';
 
 const { default: handler, config } = await import('../../api/gemini.js');
 
-// --- platform-specific pins -------------------------------------------------
+// -- platform-specific pins
 
 test('[vercel] export const config pins the Edge runtime', () => {
   assert.deepEqual(config, { runtime: 'edge' });
@@ -65,7 +65,7 @@ test('[vercel] handler also exposes .fetch and .scheduled', async () => {
   assert.equal(res.status, 200);
 });
 
-// --- shared behavior suite --------------------------------------------------
+// -- shared behavior suite
 
 registerAdapterSuite('vercel', (request, env, ctx) => handler(request, null, ctx ?? {}));
 

@@ -237,7 +237,7 @@ export async function handleChatCompletions(request, body, config) {
             }
           }, 2000);
 
-          // -- 第三步：构建并发送 Gemini 请求（含重试逻辑）----
+          // -- 第三步：构建并发送 Gemini 请求（含重试逻辑）
           var reqBody = buildPayload(prompt, modelId, thinkMode, config);
           var url = buildUrl(config);
 

@@ -30,7 +30,7 @@ const worker = await import('../../cloudflare/worker.js');
 // Minimal stand-in for the wrangler.jsonc KV binding on every request.
 const ENV = { PROXY_KV: {} };
 
-// --- platform-specific pins -------------------------------------------------
+// -- platform-specific pins
 
 test('[cloudflare] exports the Workers module shape { fetch, scheduled }', () => {
   assert.equal(typeof worker.default.fetch, 'function');
@@ -65,7 +65,7 @@ test('[cloudflare] legacy /health compat fields (activeCount/lastUpdated/nextUpd
   assert.equal(body.nextUpdate, null);
 });
 
-// --- shared behavior suite --------------------------------------------------
+// -- shared behavior suite
 
 registerAdapterSuite('cloudflare', (request, env, ctx) =>
   worker.default.fetch(request, env ?? ENV, ctx ?? null),

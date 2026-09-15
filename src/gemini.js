@@ -69,54 +69,54 @@ export function buildPayload(prompt, modelId, thinkMode, config) {
   // 这是 Gemini Web 前端实际使用的数据结构
   var inner = new Array(80).fill(null);
 
-  // --- 用户消息 ---
+  // -- 用户消息
   // [prompt, 消息索引, 图片, 附件, 元数据, 上下文ID, 新对话标志]
   inner[0] = [prompt, 0, null, null, null, null, 0];
 
-  // --- 语言设置为英语 ---
+  // -- 语言设置为英语
   inner[1] = ['en'];
 
-  // --- 对话上下文 ---
+  // -- 对话上下文
   // 全部为空表示新对话，不使用任何历史记录
   inner[2] = ['', '', '', null, null, null, null, null, null, ''];
 
-  // --- 连续对话标志 ---
+  // -- 连续对话标志
   inner[6] = [0];
 
-  // --- 流式输出标志 ---
+  // -- 流式输出标志
   inner[7] = 1;    // 启用流式
   inner[10] = 1;   // 流式输出
 
-  // --- 安全过滤级别 ---
+  // -- 安全过滤级别
   // 0 = 基础过滤（推荐值，不会过度拦截正常内容）
   // 1 = 严格过滤（可能误拦）
   // 2 = 最严格过滤（非常保守）
   inner[11] = 0;
 
-  // --- 思考模式配置 ---
+  // -- 思考模式配置
   // 双层嵌套数组: [[thinkMode]]
   // 外层数组包含一个内层数组，内层数组包含 thinkMode 值
   inner[17] = [[thinkMode]];
 
-  // --- 扩展思考标志 ---
+  // -- 扩展思考标志
   inner[18] = 0;
 
-  // --- 各种内部参数 ---
+  // -- 各种内部参数
   // 这些参数的具体含义未知，但保持与 Gemini Web 前端一致
   inner[27] = 1;   // 未知标志
   inner[30] = [4]; // 输出格式设置
   inner[41] = [2]; // 响应类型设置
   inner[53] = 0;   // 未知标志
 
-  // --- 唯一请求 ID ---
+  // -- 唯一请求 ID
   // 使用 UUID v4 确保每次请求都有全局唯一的标识
   inner[59] = generateUUID();
 
-  // --- 附件列表 ---
+  // -- 附件列表
   // 空数组表示没有附件
   inner[61] = [];
 
-  // --- 其他设置 ---
+  // -- 其他设置
   inner[68] = 1;   // 未知标志
 
   // ⭐ 模型选择（最关键字段）
@@ -125,12 +125,12 @@ export function buildPayload(prompt, modelId, thinkMode, config) {
   //   4=AUTO（自动）, 5=FAST_DYNAMIC_THINKING, 6=FLASH_LITE
   inner[79] = modelId;
 
-  // --- 外层包装 ---
+  // -- 外层包装
   // Gemini 的请求体是双层嵌套 JSON:
   // 外层: [null, inner_json_string]
   var outer = [null, JSON.stringify(inner)];
 
-  // --- 构建 URL 编码参数 ---
+  // -- 构建 URL 编码参数
   var params = new URLSearchParams();
   // 主要数据放在 f.req 参数中
   params.append('f.req', JSON.stringify(outer));

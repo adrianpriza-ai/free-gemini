@@ -13,7 +13,7 @@ const restoreEnv = setupTestEnv();
 
 const handler = (await import('../../netlify/shared-adapter.js')).default;
 
-// --- platform-specific pins -------------------------------------------------
+// -- platform-specific pins
 
 test('[netlify] platform identity is Netlify Edge Functions', async () => {
   const { body } = await jsonOf(await handler(req('/health'), null));
@@ -43,7 +43,7 @@ test('[netlify] handler also exposes .fetch and .scheduled', async () => {
   assert.equal(body.status, 'ok');
 });
 
-// --- shared behavior suite --------------------------------------------------
+// -- shared behavior suite
 
 registerAdapterSuite('netlify', (request, env, ctx) => handler(request, null, ctx ?? {}));
 
