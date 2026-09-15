@@ -8,7 +8,6 @@ import { log } from './utils.js';
 
 // 🌐 代理池系统 (ProxyScrape 自动获取 + 连通性测试 + 24小时自动更新)
 
-// ============================================================
 // 📊 Cloudflare Workers 子请求预算管理器
 //
 // 【为什么需要这个？】
@@ -20,7 +19,6 @@ import { log } from './utils.js';
 // Gemini 请求，预算必然耗尽，剩余的 fetch() 直接抛出
 // "Too many subrequests by single Worker invocation"。
 //
-// ============================================================
 // 之前每批 6 个、最多测 60 个代理，加上拉源 fetch 和 Gemini 主请求本身，
 // 预算必然耗尽，剩余的 fetch() 直接抛出
 // "Too many subrequests by single Worker invocation"。
@@ -31,7 +29,6 @@ import { log } from './utils.js';
 //
 // 超预算时的行为：不抛错、不中断，而是"未雨绸缪"——提前停止测试代理，
 // 保证真正的业务请求（Gemini）永远有子请求额度可用。
-// ============================================================
 var SUBREQUEST_BUDGET = {
   // 每个请求调用允许的最大子请求数（保守估计免费计划约 50）
   perInvocationLimit: 50,

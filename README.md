@@ -16,6 +16,7 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 > - **Vercel**: Deploy to Vercel Edge Functions with 1-click — see [Vercel Deployment Docs](vercel/VERCEL.md)  
 >   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Cloudflare**: Deploy to Cloudflare Workers — see [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or [Full Cloudflare Docs](cloudflare/README.md)
+>   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
 
 ## Features
 
