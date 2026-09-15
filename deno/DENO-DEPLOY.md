@@ -23,7 +23,6 @@ Run Gemini Web2API on [Deno Deploy](https://deno.com/deploy) for true SSE stream
    - **Build command**: (leave empty)
    - **Runtime mode**: `Dynamic`
    - **Entrypoint**: `deno/deploy.js`
-   - **Region**: `us`, `eu`, or `global`
 5. (Optional) Add environment variables (see table below), choosing the Production/Development contexts.
 6. Click **Create App**. The build runs, warms up, and your API is live at `https://your-app-name.deno.net`.
 

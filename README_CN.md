@@ -17,6 +17,8 @@
 >
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Deno**：部署到 Deno Deploy — 参见 [Deno Deploy 部署指南](deno/DENO-DEPLOY_CN.md)
+>
+>   [![Deploy on Deno](https://deno.com/button)](https://console.deno.com/new?clone=https://github.com/adrianpriza-ai/free-gemini)
 
 ## 特性
 

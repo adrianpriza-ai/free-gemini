@@ -18,6 +18,7 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 > - **Cloudflare**: Deploy to Cloudflare Workers — see [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or [Full Cloudflare Docs](cloudflare/README.md)
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Deno**: Deploy to Deno Deploy — see [Deno Deploy Deployment Docs](deno/DENO-DEPLOY.md)
+>   [![Deploy on Deno](https://deno.com/button)](https://console.deno.com/new?clone=https://github.com/adrianpriza-ai/free-gemini)
 
 ## Features
 

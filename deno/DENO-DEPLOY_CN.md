@@ -23,7 +23,6 @@
    - **Build command**: （留空）
    - **Runtime mode**: `Dynamic`
    - **Entrypoint**: `deno/deploy.js`
-   - **Region**: `us`、`eu` 或 `global`
 5. （可选）按下表添加环境变量，并选择 Production/Development 上下文。
 6. 点击 **Create App**。构建与预热完成后，API 即已在 `https://your-app-name.deno.net` 上线。
 
