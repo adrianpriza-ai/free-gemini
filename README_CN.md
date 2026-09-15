@@ -10,10 +10,11 @@
 
 > ☁️ **想要无服务器部署?** 可将同样的 API 免费部署到边缘计算平台，无需维护服务器：
 > - **Netlify**：一键部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](netlify/NETLIFY_CN.md)  
->   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini
+>   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
 > - **Vercel**：一键部署到 Vercel Edge Functions — 参见 [Vercel 部署指南](vercel/VERCEL_CN.md)  
 >   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
-> - **Cloudflare**：部署到 Cloudflare Workers — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP.md) 或 [完整部署文档](cloudflare/README_CN.md)
+> - **Cloudflare**：部署到 Cloudflare Workers — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP_CN.md) 或 [完整部署文档](cloudflare/README_CN.md)
+>
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
 
 ## 特性
