@@ -17,6 +17,7 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 >   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Cloudflare**: Deploy to Cloudflare Workers — see [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or [Full Cloudflare Docs](cloudflare/README.md)
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
+> - **Deno**: Deploy to Deno Deploy — see [Deno Deploy Deployment Docs](deno/DENO-DEPLOY.md)
 
 ## Features
 
@@ -30,6 +31,7 @@ Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, 
 - **Streaming**: SSE streaming support via `httpx`
 - **Codex CLI**: Responses API (`/v1/responses`) for OpenAI Codex integration
 - **Gemini CLI**: Google native API (`/v1beta/models`) for Gemini CLI compatibility
+- **Deno Deploy**: First-class adapter (`deno/deploy.js`) with raw TCP sockets (full proxy pool) and native `HTTPS_PROXY` tunneling
 
 ## Quick Start
 

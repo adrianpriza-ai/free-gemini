@@ -1,14 +1,18 @@
 // 🧩 平台抽象层 (Platform abstraction layer)
 //
-// 平台适配器（cloudflare/worker.js、api/gemini.js、netlify/*/gemini.js）在模块
-// 加载时调用 setPlatformConnect() 注入本平台的能力：
+// 平台适配器（cloudflare/worker.js、api/gemini.js、netlify/*/gemini.js、
+// deno/deploy.js）在模块加载时调用 setPlatformConnect() 注入本平台的能力：
 //   - Cloudflare Workers: 注入 import { connect } from 'cloudflare:sockets'
+//   - Deno Deploy: 注入 deno/sockets.js 包装的 Deno.connect（异步工厂，调用点
+//     统一 await；Deno fetch 还会原生读取 HTTPS_PROXY 静态出站代理）
 //   - Netlify Edge/Functions 与 Vercel Edge: 保持 null（无原始 TCP socket，
-//     全局 fetch 直连 gemini.google.com；Deno fetch 还会原生读取 HTTPS_PROXY）
+//     全局 fetch 直连 gemini.google.com）
 //
 // Platform adapters inject their capabilities at module load via
 // setPlatformConnect(): Cloudflare passes `connect` from 'cloudflare:sockets',
-// while Netlify/Vercel have no raw sockets and stay null (global fetch only).
+// Deno Deploy passes the wrapped Deno.connect from deno/sockets.js (async
+// factory; call sites await), while Netlify/Vercel have no raw sockets and
+// stay null (global fetch only).
 
 // 原始 TCP socket 工厂；null 表示当前平台不支持（代理池自动降级为直连）
 // Raw TCP socket factory; null means the platform cannot host the proxy pool.

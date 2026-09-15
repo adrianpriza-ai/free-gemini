@@ -2,6 +2,11 @@
 // 子请求预算、代理解析/TCP 隧道、连通性测试、池刷新与 geminiFetch 路由。
 // Subrequest budget, proxy tunnels, pool refresh and geminiFetch routing.
 // 依赖 src/platform.js 注入的 connect（Netlify/Vercel 上自动降级直连）。
+// connect 工厂允许同步（Cloudflare workersd）或异步（Deno.connect，经 deno/sockets.js
+// 包装后仍暴露 workerd 风格 socket）；调用点统一 await，对同步实现是无操作。
+// The injected connect factory may be sync (Cloudflare workerd) or async
+// (Deno.connect wrapped by deno/sockets.js). Call sites always await — a
+// no-op for sync implementations.
 
 import { connect } from './platform.js';
 import { log } from './utils.js';
@@ -675,7 +680,8 @@ async function testProxy(proxy, timeoutMs) {
       // 🔧 关键修复：secureTransport 必须为 'starttls'。
       // startTls() 只允许在 secureTransport='starttls' 的 socket 上调用，
       // 否则会抛出异常/挂起，导致代理测试永远失败。
-      socket = connect({ hostname: proxy.host, port: proxy.port }, { secureTransport: 'starttls' });
+      // await 兼容同步（CF）与异步（Deno）connect 工厂。
+      socket = await connect({ hostname: proxy.host, port: proxy.port }, { secureTransport: 'starttls' });
       if (proxy.protocol === 'socks5') {
         await establishSocks5Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
       } else if (proxy.protocol === 'socks4') {
@@ -739,7 +745,9 @@ async function fetchViaProxy(url, options, proxy, config) {
   try {
     var run = async function () {
       // 🔧 关键修复：secureTransport 必须为 'starttls'（见 testProxy 内注释）。
-      socket = connect({ hostname: proxy.host, port: proxy.port }, { secureTransport: 'starttls' });
+      // await 兼容同步（CF）与异步（Deno）connect 工厂；信号检查移到 await
+      // 之后，保证异步建连期间已被取消的请求不会泄漏 socket。
+      socket = await connect({ hostname: proxy.host, port: proxy.port }, { secureTransport: 'starttls' });
 
       if (options.signal) {
         if (options.signal.aborted) {
@@ -762,7 +770,8 @@ async function fetchViaProxy(url, options, proxy, config) {
       // 升级 TLS 会话
       // 🔧 修复：workerd 的 TlsOptions 只认 expectedServerHostname（servername 是 Node 风格的写法，
       // 会被静默忽略），显式指定 SNI 以便证书校验通过。
-      tlsSocket = socket.startTls({ expectedServerHostname: 'gemini.google.com' });
+      // Deno 侧 startTls 由 deno/sockets.js 包装为异步方法，统一 await。
+      tlsSocket = await socket.startTls({ expectedServerHostname: 'gemini.google.com' });
 
       // 构建 HTTP/1.1 请求报文
       var urlObj = new URL(url);

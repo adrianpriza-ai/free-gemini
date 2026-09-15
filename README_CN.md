@@ -16,6 +16,7 @@
 > - **Cloudflare**：部署到 Cloudflare Workers — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP_CN.md) 或 [完整部署文档](cloudflare/README_CN.md)
 >
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
+> - **Deno**：部署到 Deno Deploy — 参见 [Deno Deploy 部署指南](deno/DENO-DEPLOY_CN.md)
 
 ## 特性
 
@@ -29,6 +30,7 @@
 - **流式输出**: 基于 `httpx` 的 SSE Streaming 支持
 - **Codex CLI**: Responses API (`/v1/responses`) 兼容 OpenAI Codex
 - **Gemini CLI**: Google 原生 API (`/v1beta/models`) 兼容 Gemini CLI
+- **Deno Deploy**: 一等适配器 (`deno/deploy.js`)，支持原始 TCP Socket（完整代理池）与 `HTTPS_PROXY` 原生隧道
 
 ## 快速开始
 

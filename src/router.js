@@ -111,6 +111,14 @@ export async function handleRequest(request, envOrContext, ctx) {
         platform = 'Netlify Edge Functions';
       } else if (typeof process !== 'undefined' && process.env && process.env.NETLIFY) {
         platform = 'Netlify Functions';
+      } else if (typeof Deno !== 'undefined' && typeof Deno.serve === 'function') {
+        // Deno Deploy / 本地 deno run（Netlify Edge 也是 Deno，但已被上面的
+        // Netlify 分支拦截）。Deno Deploy 请求不携带任何专属指纹头，依靠
+        // Deno 全局识别。
+        // Deno Deploy / local `deno run`. Netlify Edge also runs on Deno but is
+        // caught by the Netlify branch above; Deploy requests carry no
+        // platform-specific headers, so detection relies on the Deno global.
+        platform = 'Deno Deploy';
       }
 
       return sendJSON({

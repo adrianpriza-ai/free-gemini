@@ -32,7 +32,7 @@ jobs:
       - name: Install Python dependencies
         run: python3 -m pip install --quiet -r requirements.txt
 
-      - name: JS adapter tests (cloudflare / netlify / vercel)
+      - name: JS adapter tests (cloudflare / netlify / vercel / deno)
         run: npm run test:js
 
       - name: Python tests (modular sync)
