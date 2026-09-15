@@ -8,6 +8,7 @@ import {
   getProxyPoolDefaultEnabled,
   mergePlatformEnv,
 } from './platform.js';
+import { getProxyTimeoutDefaults } from './proxy.js';
 import { log } from './utils.js';
 
 // 🔒 默认配置 - 仅作为只读模板
@@ -15,6 +16,10 @@ import { log } from './utils.js';
 // 这是所有请求配置的"蓝图"（Blueprint），用于生成每个请求的独立配置副本。
 // 这个对象永远不会被修改，所有修改都在请求级的 config 副本中进行。
 // 使用 Object.freeze() 确保不可变性，防止意外修改导致全局影响。
+
+// 挂起防护超时默认值（真实来源在 src/proxy.js，这里仅用于填充 DEFAULT_CONFIG）
+// Hang-guard timeout defaults (single source of truth in src/proxy.js).
+var proxyTimeoutDefaults = getProxyTimeoutDefaults();
 
 export var DEFAULT_CONFIG = {
   // -- 重试配置
@@ -134,6 +139,13 @@ export var DEFAULT_CONFIG = {
     updateIntervalHours: 24,
     // 当所有代理不可用时是否自动降级回退到直连（确保业务高可用）
     fallbackDirect: true,
+    // ⏱️ 挂起防护超时（默认值由 src/proxy.js 单一来源提供，环境变量可覆盖）：
+    //   sourceFetchTimeoutMs: 拉取代理列表源的硬超时（PROXY_SOURCE_FETCH_TIMEOUT_MS）
+    //   handshakeTimeoutMs:   与代理建立 CONNECT/SOCKS 隧道的硬超时（PROXY_HANDSHAKE_TIMEOUT_MS）
+    //   refreshSyncMs:        冷启动同步等待代理池刷新的上限，超时转后台（PROXY_REFRESH_SYNC_MS）
+    sourceFetchTimeoutMs: proxyTimeoutDefaults.sourceFetchMs,
+    handshakeTimeoutMs: proxyTimeoutDefaults.handshakeMs,
+    refreshSyncMs: proxyTimeoutDefaults.refreshSyncMs,
     // 代理轮询方式（PROXY_ROTATION_MODE 环境变量覆盖）：
     //   'round-robin'  严格顺序轮询（公平，无质量感知）
     //   'random'       纯均匀随机
@@ -226,6 +238,10 @@ export function getRequestConfig(env, ctx) {
       updateIntervalHours: DEFAULT_CONFIG.proxy.updateIntervalHours,
       fallbackDirect: DEFAULT_CONFIG.proxy.fallbackDirect,
       rotationMode: DEFAULT_CONFIG.proxy.rotationMode,
+      // 挂起防护超时（数字类型，逐字段拷贝）
+      sourceFetchTimeoutMs: DEFAULT_CONFIG.proxy.sourceFetchTimeoutMs,
+      handshakeTimeoutMs: DEFAULT_CONFIG.proxy.handshakeTimeoutMs,
+      refreshSyncMs: DEFAULT_CONFIG.proxy.refreshSyncMs,
     },
   };
 
@@ -402,6 +418,20 @@ export function getRequestConfig(env, ctx) {
   if (env.PROXY_UPDATE_INTERVAL_HOURS) {
     var puih = parseInt(env.PROXY_UPDATE_INTERVAL_HOURS, 10);
     if (!isNaN(puih) && puih > 0) config.proxy.updateIntervalHours = puih;
+  }
+  // -- 挂起防护超时（毫秒）：防止代理源/死代理/冷启动刷新无限期挂起
+  // 与其他超时变量一致：>0 才生效，非法值静默忽略并保留默认值
+  if (env.PROXY_SOURCE_FETCH_TIMEOUT_MS) {
+    var psftm = parseInt(env.PROXY_SOURCE_FETCH_TIMEOUT_MS, 10);
+    if (!isNaN(psftm) && psftm > 0) config.proxy.sourceFetchTimeoutMs = psftm;
+  }
+  if (env.PROXY_HANDSHAKE_TIMEOUT_MS) {
+    var phtm = parseInt(env.PROXY_HANDSHAKE_TIMEOUT_MS, 10);
+    if (!isNaN(phtm) && phtm > 0) config.proxy.handshakeTimeoutMs = phtm;
+  }
+  if (env.PROXY_REFRESH_SYNC_MS) {
+    var prsm = parseInt(env.PROXY_REFRESH_SYNC_MS, 10);
+    if (!isNaN(prsm) && prsm > 0) config.proxy.refreshSyncMs = prsm;
   }
   if (env.PROXY_FALLBACK_DIRECT !== undefined) {
     config.proxy.fallbackDirect = String(env.PROXY_FALLBACK_DIRECT).toLowerCase() === 'true' || env.PROXY_FALLBACK_DIRECT === '1';

@@ -87,6 +87,9 @@ Point any OpenAI-compatible client (NextChat, LobeChat, Codex CLI, …) at `http
 | `PROXY_ROTATION_MODE` | `best-of-2` | `round-robin` / `random` / `best-of-2` / `weighted` |
 | `PROXY_SOURCE_URL` | ProxyScrape | Custom proxy list source |
 | `PROXY_UPDATE_INTERVAL_HOURS` | `24` | Pool refresh interval |
+| `PROXY_SOURCE_FETCH_TIMEOUT_MS` | `8000` | Hard timeout for fetching the proxy list source |
+| `PROXY_HANDSHAKE_TIMEOUT_MS` | `6000` | Hard timeout for the CONNECT/SOCKS handshake per proxy |
+| `PROXY_REFRESH_SYNC_MS` | `8000` | Max synchronous wait for the cold-start pool refresh |
 
 Set them in the Cloudflare dashboard (**Workers → your worker → Settings → Variables**) or in `wrangler.jsonc` under `"vars"`.
 

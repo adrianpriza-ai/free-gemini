@@ -146,6 +146,13 @@ export async function handleRequest(request, envOrContext, ctx) {
           // 配置的静态出站代理（隐藏具体值，只报告是否设置）
           // Configured static outbound proxy (value hidden, only reported as set/unset)
           outboundProxy: config.outboundProxy ? '(set)' : null,
+          // ⏱️ 挂起防护超时（请求级生效值，环境变量可调）
+          // Hang-guard timeouts in effect for this request (env-tunable)
+          timeouts: {
+            sourceFetchMs: config.proxy.sourceFetchTimeoutMs,
+            handshakeMs: config.proxy.handshakeTimeoutMs,
+            refreshSyncMs: config.proxy.refreshSyncMs,
+          },
         },
       });
     }
@@ -252,6 +259,13 @@ export async function handleRequest(request, envOrContext, ctx) {
             maxPoolSize: config.proxy.maxPoolSize,
             fallbackDirect: config.proxy.fallbackDirect,
             rotationMode: config.proxy.rotationMode,
+            // ⏱️ 挂起防护超时（请求级生效值，环境变量可调）
+            // Hang-guard timeouts in effect for this request (env-tunable)
+            timeouts: {
+              sourceFetchMs: config.proxy.sourceFetchTimeoutMs,
+              handshakeMs: config.proxy.handshakeTimeoutMs,
+              refreshSyncMs: config.proxy.refreshSyncMs,
+            },
             candidatesCache: {
               size: globalProxyState.candidatesCache ? globalProxyState.candidatesCache.length : 0,
               ageSeconds: globalProxyState.candidatesCacheTime ? Math.round((nowDebug - globalProxyState.candidatesCacheTime) / 1000) : null,

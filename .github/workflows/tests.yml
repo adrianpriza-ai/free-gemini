@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install JS dev dependencies
+        run: npm ci --ignore-scripts --no-fund --no-audit
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --quiet -r requirements.txt
+
+      - name: JS adapter tests (cloudflare / netlify / vercel)
+        run: npm run test:js
+
+      - name: Python tests (modular sync)
+        run: python3 -m unittest discover -s tests

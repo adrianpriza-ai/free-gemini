@@ -57,3 +57,7 @@ Thumbs.db
 # Vercel CLI local state
 .vercel/
 
+# Node
+
+node_modules/
+

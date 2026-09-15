@@ -20,12 +20,6 @@ import { log } from './utils.js';
 // Gemini 请求，预算必然耗尽，剩余的 fetch() 直接抛出
 // "Too many subrequests by single Worker invocation"。
 //
-// 【预算分配策略】
-//   代理池刷新（拉源+测试）上限: 32   ← 最多也只验证 16 个代理
-//   Gemini 主请求预留:          12   ← 至少 8 次直连重试的机会
-//
-// 超预算时的行为：不抛错、不中断，而是"未雨绸缪"——提前停止测试代理，
-// 保证真正的业务请求（Gemini）永远有子请求额度可用。
 // ============================================================
 // 之前每批 6 个、最多测 60 个代理，加上拉源 fetch 和 Gemini 主请求本身，
 // 预算必然耗尽，剩余的 fetch() 直接抛出
@@ -46,6 +40,103 @@ var SUBREQUEST_BUDGET = {
   // 为 Gemini 主请求（含重试与直连降级）保留的子请求数
   mainRequestReserve: 18,
 };
+
+// ⏱️ 挂起防护超时（毫秒）
+//
+// 【为什么需要这些？】
+// workerd 的全局 fetch() 与底层 socket read() 都没有默认超时：
+//   - 代理源站点（或中间链路）不响应 → await fetch() 无限期挂起
+//   - 死代理接受 TCP 连接后不回握手 → await reader.read() 无限期挂起
+//   - 冷启动同步刷新代理池最坏要测 30+ 个代理 → 第一个请求可能等数十秒
+// 任何一处不设超时，请求都会表现为"发出后永远没有回复"。
+//
+// 【可通过环境变量调优】（src/config.js 解析后放入 config.proxy，调用点优先读
+// config，无值时回退到这里的默认值，保证单一事实来源）：
+//   PROXY_SOURCE_FETCH_TIMEOUT_MS → config.proxy.sourceFetchTimeoutMs（默认 8000）
+//   PROXY_HANDSHAKE_TIMEOUT_MS    → config.proxy.handshakeTimeoutMs（默认 6000）
+//   PROXY_REFRESH_SYNC_MS         → config.proxy.refreshSyncMs（默认 8000）
+var PROXY_SOURCE_FETCH_TIMEOUT_MS = 8000; // 拉取代理列表源的硬超时
+var TUNNEL_HANDSHAKE_TIMEOUT_MS = 6000;   // 与代理建立 CONNECT/SOCKS 隧道的硬超时
+var POOL_REFRESH_MAX_SYNC_MS = 8000;      // 冷启动同步等待代理池刷新的上限，超时转后台
+
+/**
+ * 读取挂起防护超时的默认值（src/config.js 构建 DEFAULT_CONFIG 时消费）
+ * Read the hang-guard timeout defaults (consumed by src/config.js when
+ * building DEFAULT_CONFIG, keeping a single source of truth in this module).
+ *
+ * @returns {Object} { sourceFetchMs, handshakeMs, refreshSyncMs }
+ */
+export function getProxyTimeoutDefaults() {
+  return {
+    sourceFetchMs: PROXY_SOURCE_FETCH_TIMEOUT_MS,
+    handshakeMs: TUNNEL_HANDSHAKE_TIMEOUT_MS,
+    refreshSyncMs: POOL_REFRESH_MAX_SYNC_MS,
+  };
+}
+
+/**
+ * 带硬超时的文本拉取（用于代理源列表等无外部超时保护的子请求）
+ *
+ * 用 AbortController 强制在 timeoutMs 内完成（含响应体读取），
+ * 超时/失败/非 200 一律返回空字符串，由调用方决定是否走备用源。
+ *
+ * @param {string} url - 请求 URL
+ * @param {number} timeoutMs - 超时毫秒数
+ * @returns {Promise<string>} 响应文本（失败/超时时为 ''）
+ */
+async function fetchTextWithTimeout(url, timeoutMs) {
+  var controller = new AbortController();
+  var timer = setTimeout(function () {
+    try { controller.abort(); } catch (e) {}
+  }, timeoutMs || 10000);
+  try {
+    var res = await fetch(url, {
+      headers: { 'User-Agent': 'curl/8.0.0' },
+      signal: controller.signal,
+    });
+    if (!res.ok) return '';
+    return await res.text();
+  } catch (e) {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 建立到 gemini.google.com:443 的代理隧道（带握手硬超时）
+ *
+ * 死代理的典型行为：TCP 三次握手成功，但对 CONNECT/SOCKS 请求静默
+ * 不回应 —— await reader.read() 会永远挂起。这里给整个握手过程
+ * 包一层超时，超时即抛错，由上层轮换到下一个代理或降级直连。
+ *
+ * @param {Socket} socket - 已连接到代理的原始 TCP socket
+ * @param {Object} proxy - 代理对象
+ * @param {number} timeoutMs - 握手超时毫秒数
+ */
+async function establishTunnelWithTimeout(socket, proxy, timeoutMs) {
+  var tunnelPromise;
+  if (proxy.protocol === 'socks5') {
+    tunnelPromise = establishSocks5Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
+  } else if (proxy.protocol === 'socks4') {
+    tunnelPromise = establishSocks4Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
+  } else {
+    tunnelPromise = establishHttpConnectTunnel(socket, 'gemini.google.com', 443, proxy.auth);
+  }
+
+  var timer = null;
+  var timeoutPromise = new Promise(function (_, reject) {
+    timer = setTimeout(function () {
+      reject(new Error('代理隧道握手超时 (' + timeoutMs + 'ms)，目标 ' + proxy.host + ':' + proxy.port));
+    }, timeoutMs);
+  });
+
+  try {
+    await Promise.race([tunnelPromise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /**
  * 子请求预算状态（请求级）
@@ -633,8 +724,20 @@ async function fetchViaProxy(url, options, proxy, config) {
     throw new Error('Raw TCP sockets not supported on this platform');
   }
   var socket = null;
+  var tlsSocket = null;
   var timer = null;
+  var socketClosed = false;
   var timeoutMs = (config.requestTimeoutSec || 28) * 1000;
+
+  // 🔌 统一关闭底层连接（明文 socket + TLS socket）。
+  // 必须在响应体读尽/取消后调用，否则每个请求都会在代理上留下一条
+  // 半开连接，Isolate 很快就会积累大量泄漏的 socket。
+  var closeAll = function () {
+    if (socketClosed) return;
+    socketClosed = true;
+    try { if (tlsSocket) tlsSocket.close(); } catch (e) {}
+    try { if (socket) socket.close(); } catch (e) {}
+  };
 
   try {
     var run = async function () {
@@ -651,19 +754,18 @@ async function fetchViaProxy(url, options, proxy, config) {
         });
       }
 
-      // 建立到 gemini.google.com:443 的隧道
-      if (proxy.protocol === 'socks5') {
-        await establishSocks5Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
-      } else if (proxy.protocol === 'socks4') {
-        await establishSocks4Tunnel(socket, 'gemini.google.com', 443, proxy.auth);
-      } else {
-        await establishHttpConnectTunnel(socket, 'gemini.google.com', 443, proxy.auth);
-      }
+      // 建立到 gemini.google.com:443 的隧道（带握手硬超时，防止死代理挂起；
+      // PROXY_HANDSHAKE_TIMEOUT_MS 可调）
+      await establishTunnelWithTimeout(
+        socket,
+        proxy,
+        (config.proxy && config.proxy.handshakeTimeoutMs) || TUNNEL_HANDSHAKE_TIMEOUT_MS,
+      );
 
       // 升级 TLS 会话
       // 🔧 修复：workerd 的 TlsOptions 只认 expectedServerHostname（servername 是 Node 风格的写法，
       // 会被静默忽略），显式指定 SNI 以便证书校验通过。
-      var tlsSocket = socket.startTls({ expectedServerHostname: 'gemini.google.com' });
+      tlsSocket = socket.startTls({ expectedServerHostname: 'gemini.google.com' });
 
       // 构建 HTTP/1.1 请求报文
       var urlObj = new URL(url);
@@ -756,7 +858,18 @@ async function fetchViaProxy(url, options, proxy, config) {
         bodyStream = bodyStream.pipeThrough(new DecompressionStream('deflate'));
       }
 
-      return new Response(bodyStream, {
+      // 🔌 套接字生命周期：经管道转发到下游，pipeTo 在下游读尽或被取消时
+      // 结束，届时关闭底层 socket。pipeTo 保留背压语义（下游不读则不拉），
+      // 清理动作通过 waitUntil 挂到请求生命周期上，避免被提前回收。
+      var downstream = new TransformStream();
+      var pipePromise = bodyStream.pipeTo(downstream.writable);
+      var onPipeSettled = function () { closeAll(); };
+      pipePromise.then(onPipeSettled, onPipeSettled);
+      if (config._ctx && typeof config._ctx.waitUntil === 'function') {
+        config._ctx.waitUntil(pipePromise.catch(function () {}));
+      }
+
+      return new Response(downstream.readable, {
         status: statusCode,
         statusText: statusText,
         headers: respHeaders,
@@ -774,9 +887,7 @@ async function fetchViaProxy(url, options, proxy, config) {
     return resp;
   } catch (err) {
     if (timer) clearTimeout(timer);
-    if (socket) {
-      try { socket.close(); } catch (e) {}
-    }
+    closeAll();
     throw err;
   }
 }
@@ -811,33 +922,23 @@ async function fetchProxyCandidates(config, force) {
 
   // 2. 从主代理源拉取 (ProxyScrape 200ms timeout API)
   // 📊 每次上游拉取计为 1 个刷新子请求
+  // ⏱️ 带硬超时（PROXY_SOURCE_FETCH_TIMEOUT_MS 可调）：源站不响应时决不能拖住整个请求
+  var sourceFetchTimeoutMs = (config.proxy && config.proxy.sourceFetchTimeoutMs) || PROXY_SOURCE_FETCH_TIMEOUT_MS;
   var fetchedText = '';
   if (config.proxy && config.proxy.sourceUrl) {
     trackSubrequest(config, 'refresh');
-    try {
-      var res = await fetch(config.proxy.sourceUrl, {
-        headers: { 'User-Agent': 'curl/8.0.0' }
-      });
-      if (res.ok) {
-        fetchedText = await res.text();
-      }
-    } catch (e) {
-      log('获取主代理源失败: ' + e.message + '，尝试备用源...', 'WARN', config);
+    fetchedText = await fetchTextWithTimeout(config.proxy.sourceUrl, sourceFetchTimeoutMs);
+    if (!fetchedText) {
+      log('获取主代理源失败（超时 ' + sourceFetchTimeoutMs + 'ms 或非 200），尝试备用源...', 'WARN', config);
     }
   }
 
   // 3. 若主代理源为空，拉取备用源 (GitHub raw 完整列表)
   if (!fetchedText.trim() && config.proxy && config.proxy.fallbackSourceUrl) {
     trackSubrequest(config, 'refresh');
-    try {
-      var fbRes = await fetch(config.proxy.fallbackSourceUrl, {
-        headers: { 'User-Agent': 'curl/8.0.0' }
-      });
-      if (fbRes.ok) {
-        fetchedText = await fbRes.text();
-      }
-    } catch (e) {
-      log('获取备用代理源失败: ' + e.message, 'WARN', config);
+    fetchedText = await fetchTextWithTimeout(config.proxy.fallbackSourceUrl, sourceFetchTimeoutMs);
+    if (!fetchedText) {
+      log('获取备用代理源失败（超时或非 200）', 'WARN', config);
     }
   }
 
@@ -1000,9 +1101,31 @@ async function ensureProxyReady(config) {
   var now = Date.now();
   var intervalMs = (config.proxy.updateIntervalHours || 24) * 3600 * 1000;
 
-  // 冷启动且代理池为空，同步初始化
+  // 冷启动且代理池为空：同步初始化，但设置严格上限
+  //
+  // 【修复"请求挂起"】冷启动刷新最坏要拉取源 + 分批测试 30+ 个代理，
+  // 可能耗时数十秒；无限等待会让第一个请求永远得不到回复。
+  // 同步等待 refreshSyncMs（PROXY_REFRESH_SYNC_MS 可调）后：
+  //   - 刷新转由 waitUntil 后台继续（结果写入 Isolate 级/KV 缓存）
+  //   - 本次请求立即放行 → geminiFetch 走 fallbackDirect 直连
   if (globalProxyState.proxies.length === 0 && !globalProxyState.isUpdating) {
-    await refreshProxyPool(config, config._env, config._ctx, false);
+    var maxSyncMs = (config.proxy && config.proxy.refreshSyncMs) || POOL_REFRESH_MAX_SYNC_MS;
+    var refreshTask = refreshProxyPool(config, config._env, config._ctx, false);
+    var timerId = null;
+    var guard = new Promise(function (resolve) {
+      timerId = setTimeout(function () { resolve('timeout'); }, maxSyncMs);
+    });
+    var outcome = await Promise.race([
+      refreshTask.then(function () { return 'done'; }),
+      guard,
+    ]);
+    if (timerId) clearTimeout(timerId);
+    if (outcome === 'timeout') {
+      log('冷启动代理池刷新超时（' + maxSyncMs + 'ms），转后台继续，本次请求降级直连', 'WARN', config);
+      if (config._ctx && typeof config._ctx.waitUntil === 'function') {
+        config._ctx.waitUntil(refreshTask.catch(function () {}));
+      }
+    }
     return;
   }
 

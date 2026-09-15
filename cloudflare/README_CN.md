@@ -178,6 +178,9 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 | `PROXY_MAX_POOL_SIZE` | 代理池保留的最大可用代理数 | `12` |
 | `PROXY_FALLBACK_DIRECT` | 代理全部失效时是否自动降级回退到直连 | `true` |
 | `PROXY_ROTATION_MODE` | 代理选择算法 — 见下方 [代理轮询模式](#代理轮询模式) | `best-of-2` |
+| `PROXY_SOURCE_FETCH_TIMEOUT_MS` | 拉取代理列表源的硬超时（毫秒）— 防止源站无响应导致请求挂起 | `8000` |
+| `PROXY_HANDSHAKE_TIMEOUT_MS` | 与单个代理建立 CONNECT/SOCKS 隧道的硬超时（毫秒）— 死代理快速失败而不是拖住请求 | `6000` |
+| `PROXY_REFRESH_SYNC_MS` | 冷启动同步等待代理池刷新的上限（毫秒）— 超时后刷新转后台，本次请求走直连 | `8000` |
 
 #### 代理轮询模式
 

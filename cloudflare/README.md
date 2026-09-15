@@ -178,6 +178,9 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 | `PROXY_MAX_POOL_SIZE` | Maximum verified proxies to keep in pool | `12` |
 | `PROXY_FALLBACK_DIRECT` | Fall back to direct connection if all proxies fail | `true` |
 | `PROXY_ROTATION_MODE` | Proxy selection algorithm — see [Proxy Rotation Modes](#proxy-rotation-modes) below | `best-of-2` |
+| `PROXY_SOURCE_FETCH_TIMEOUT_MS` | Hard timeout for fetching the proxy list source (ms) — prevents a stalled source from hanging the request | `8000` |
+| `PROXY_HANDSHAKE_TIMEOUT_MS` | Hard timeout for the CONNECT/SOCKS tunnel handshake per proxy (ms) — dead proxies fail fast instead of stalling | `6000` |
+| `PROXY_REFRESH_SYNC_MS` | Max synchronous wait for the cold-start pool refresh (ms) — past this the refresh continues in the background and the request goes direct | `8000` |
 
 #### Proxy Rotation Modes
 
