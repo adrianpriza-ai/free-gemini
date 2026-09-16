@@ -165,6 +165,18 @@ deno run --allow-net --allow-env deno/deploy.js
 
 ## 🚨 常见问题排查
 
+### `upstream timeout: no response within 50000ms (REQUEST_DEADLINE_MS)`（502）
+
+服务端在 `REQUEST_DEADLINE_MS`（默认 50 秒）内没有等到上游响应头，主动放弃并返回结构化 502。这是**症状**而非根因 —— 在 Deno Deploy 上常见根因有：
+
+1. **匿名直连出口被 Gemini 限流/挂起。** 不带 Cookie 的请求从 Deno Deploy 共享边缘 IP 发出，Gemini 经常让这类请求静默挂起或长时间无响应（非流式请求尤其明显，因为完整响应必须就绪后才能开始返回）。按有效性排序的解决办法：
+   - 设置有效的 `COOKIE_STRING`（+ `SAPISID`）—— 单项最有效的修复。
+   - 开启轮换代理池：`ENABLE_PROXY=true`（Deno 支持原始 TCP Socket），或设置静态 `HTTPS_PROXY`。
+2. **长生成超过截止时间。** 非流式请求输出很长时，耗时可能合理地超过 50 秒。调大 `REQUEST_DEADLINE_MS`（如 `90000`），或改用 `stream: true` 让内容增量到达。
+3. **路由 50 秒截止短于 55 秒重试预算。** 此问题已在代码中修复：重试循环现在会对齐路由截止时间，并抛出带提示的可读单次尝试超时错误，而不是笼统的 502。如果老部署仍显示笼统消息，请重新部署。
+
+快速自查：`GET /health` 的 `proxy.mode` 字段显示实际出站模式（`direct` / `outbound` / `pool`）—— 如果是 `direct` 且没有配置 Cookie，则命中原因 1。
+
 ### 请求挂起 / 完全无响应（本地 `deno run`）
 
 适配器每次请求都要读取环境变量。如果启动时漏掉 `--allow-env`（如 `deno run --allow-net deno/deploy.js`），第一个请求会阻塞在 Deno 的交互式权限确认上。终端前台能看到提示，但后台/管道运行时提示不可见 —— 服务就是"永远不回复"。请始终用两个权限标志启动（入口现在会在权限缺失时立即报错退出）：

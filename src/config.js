@@ -512,6 +512,27 @@ export function getRequestConfig(env, ctx) {
   config._ctx = ctx;
   config._platform = PLATFORM_ID;
 
+  // ⏱️ 请求起始时间戳（毫秒）
+  //
+  // handleRequestSafe 的 REQUEST_DEADLINE_MS 截止从 handleRequest 进入时开始
+  // 计时，而 geminiStreamGenerate 的重试循环此前只对齐平台响应头截止时间
+  // （如 Deno Deploy 55s），不知道路由层还有更短的总截止时间。两边不一致时
+  // （默认 50s < 55s），重试预算会越过路由截止 → 客户端先收到笼统的
+  // upstream_timeout 502，真正的上游错误被掩盖。
+  // 记录起始时间后，重试循环可按 "REQUEST_DEADLINE_MS - 已耗时" 收紧预算，
+  // 保证自己的截止判断与路由层截止完全一致。
+  //
+  // Request start timestamp (ms). handleRequestSafe's REQUEST_DEADLINE_MS
+  // deadline starts when handleRequest is entered, but geminiStreamGenerate's
+  // retry loop previously budgeted only against the platform pre-response
+  // deadline (e.g. Deno Deploy 55s), unaware of the router's (often shorter)
+  // total deadline. With a mismatch (default 50s < 55s) the retry budget could
+  // overrun the router deadline, so clients always saw the generic
+  // upstream_timeout 502 instead of the real upstream error. Stamping the
+  // start time lets the retry loop tighten its budget to
+  // "REQUEST_DEADLINE_MS - elapsed", keeping both deadlines in lockstep.
+  config._requestStartMs = Date.now();
+
   // 返回请求专属的配置副本
   // 这个对象在请求结束后随 Isolate 回收
   return config;

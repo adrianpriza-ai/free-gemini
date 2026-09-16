@@ -313,6 +313,33 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
   var PRERESPONSE_DEADLINE_MS = PLATFORM_PRERESPONSE_DEADLINE_MS;
   var deadline = Date.now() + PRERESPONSE_DEADLINE_MS;
 
+  // ⏱️ 路由层总截止时间（REQUEST_DEADLINE_MS，handleRequestSafe 强制执行）
+  //
+  // handleRequestSafe 在 requestDeadlineMs（默认 50000ms）内拿不到上游响应
+  // 就返回 502 upstream_timeout。重试循环必须把自己的预算对齐到这个更早的
+  // 截止：用 config._requestStartMs（进入路由时打点）扣除已耗时，再预留
+  // 3000ms 给响应体读取/收尾。否则（如 Deno Deploy：平台 55s > 路由 50s）
+  // 重试会越过路由截止，客户端先收到笼统的 upstream_timeout，真正的
+  // 上游错误（单次尝试超时/被拒）被掩盖。
+  // config._requestStartMs 缺失（直接调用/旧调用方）时此约束不生效。
+  //
+  // Router-level total deadline (REQUEST_DEADLINE_MS, enforced by
+  // handleRequestSafe). The retry loop must align its budget to this earlier
+  // deadline: subtract elapsed time since config._requestStartMs (stamped on
+  // router entry), reserving 3000ms for body read/finalization. Otherwise
+  // (e.g. Deno Deploy: platform 55s > router 50s) retries overrun the router
+  // deadline and clients see the generic upstream_timeout instead of the real
+  // upstream error (per-attempt timeout / rejection).
+  // Inactive when config._requestStartMs is absent (direct/legacy callers).
+  var ROUTER_DEADLINE_MARGIN_MS = 3000;
+  var routerDeadline = 0;
+  if (config && config._requestStartMs > 0 && config.requestDeadlineMs > 0) {
+    routerDeadline = config._requestStartMs + config.requestDeadlineMs - ROUTER_DEADLINE_MARGIN_MS;
+    if (routerDeadline > 0 && (PRERESPONSE_DEADLINE_MS <= 0 || routerDeadline < deadline)) {
+      deadline = routerDeadline;
+    }
+  }
+
   // 🎭 请求前添加随机微小延迟（模拟人类操作间隔）
   // 延迟时间在 0 到 fingerprintJitterMs 毫秒之间随机均匀分布
   // 例如 fingerprintJitterMs=1500 时，延迟在 0 到 1.5 秒之间
@@ -363,7 +390,9 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
         attemptTimeoutMs = Math.max(1000, Math.min(attemptTimeoutMs, remainingForAttempt - 500));
       }
       var controller = new AbortController();
+      var attemptTimedOut = false;
       var timeout = setTimeout(function () {
+        attemptTimedOut = true;
         controller.abort();  // 超时后中止请求
       }, attemptTimeoutMs);
 
@@ -422,10 +451,46 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
       }
 
       // 请求成功，返回响应文本
+      // 响应体读取同样受截止时间约束：上游响应头及时但正文停滞时，
+      // 让读取与截止竞争，避免此处再吃掉整个剩余预算。
+      // Body read is deadline-bound too: headers may arrive in time but the
+      // body can stall — race the read against the deadline instead of
+      // letting it consume the whole remaining budget.
+      if (PRERESPONSE_DEADLINE_MS > 0) {
+        var bodyLeft = deadline - Date.now();
+        if (bodyLeft <= 0) {
+          throw new Error('上游响应截止时间已耗尽（含响应体读取），请增加 REQUEST_DEADLINE_MS 或减少重试次数');
+        }
+        var bodyRead = response.text();
+        var bodyTimer = null;
+        var bodyTimeoutPromise = new Promise(function (_, reject) {
+          bodyTimer = setTimeout(function () {
+            reject(new Error('上游响应体读取超时（截止 ' + PRERESPONSE_DEADLINE_MS + 'ms 内未完成），可尝试流式模式或调大 REQUEST_DEADLINE_MS'));
+          }, bodyLeft);
+        });
+        try {
+          var bodyText = await Promise.race([bodyRead, bodyTimeoutPromise]);
+          return bodyText;
+        } finally {
+          if (bodyTimer) clearTimeout(bodyTimer);
+        }
+      }
       return await response.text();
 
     } catch (error) {
       // 保存错误信息
+      // 🔍 将 fetch 超时触发的裸 AbortError 包装成可读的错误消息。
+      // Deno/Node/workerd 里 controller.abort() 让 await fetch 抛出
+      // "The operation was aborted"（无上下文），用户无法判断是哪一层超时。
+      // attemptTimedOut 标志能区分"我们主动超时"与"外部取消"。
+      // Wrap the bare AbortError raised by our own per-attempt timer.
+      // controller.abort() makes `await fetch` throw "The operation was
+      // aborted" with no context; attemptTimedOut distinguishes our timeout
+      // from an external cancellation.
+      if (attemptTimedOut) {
+        error = new Error('上游请求超时（单次尝试 ' + attemptTimeoutMs + 'ms 内未拿到响应），已重试/将重试。' +
+          '如持续出现：设置 COOKIE_STRING 可大幅降低上游延迟；或启用 ENABLE_PROXY=true / HTTPS_PROXY 换出口 IP');
+      }
       lastError = error;
 
       // 如果还有重试机会，等待后重试
@@ -447,7 +512,14 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
   }
 
   // 所有重试都失败，抛出最后的错误
-  throw lastError;
+  // lastError 可能为 undefined：预算在首次尝试前就耗尽时（如剩余截止 < 3s），
+  // 循环直接 break，从未进入 try/catch —— 抛 undefined 会让上层显示
+  // "upstream error: undefined"。这里兜底为明确的错误消息。
+  // lastError may be undefined: if the budget is exhausted before the first
+  // attempt (remaining deadline < 3s), the loop breaks without ever entering
+  // try/catch — `throw lastError` would surface "upstream error: undefined"
+  // upstream. Fall back to an explicit message.
+  throw lastError || new Error('上游请求截止时间已耗尽，未发起任何有效尝试（可调大 REQUEST_DEADLINE_MS）');
 }
 
 // 📝 文本处理

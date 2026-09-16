@@ -165,6 +165,18 @@ The server starts at `http://localhost:8000` (`Deno.serve`'s default port; set t
 
 ## 🚨 Troubleshooting
 
+### `upstream timeout: no response within 50000ms (REQUEST_DEADLINE_MS)` (502)
+
+The server gave up waiting for Gemini because no upstream response (headers) arrived within `REQUEST_DEADLINE_MS` (default 50s). This is a symptom, not the root cause — on Deno Deploy the usual root causes are:
+
+1. **Anonymous direct egress is throttled by Gemini.** Requests without cookies leave from Deno Deploy's shared edge IPs, which Gemini frequently hangs or stalls (especially for non-streaming requests, where the full response must be ready before any of it can be returned). Fixes, in order of effectiveness:
+   - Set a valid `COOKIE_STRING` (+ `SAPISID`) — the single most effective fix.
+   - Enable the rotating proxy pool: `ENABLE_PROXY=true` (Deno raw sockets are supported), or set a static `HTTPS_PROXY`.
+2. **Long generations exceed the deadline.** Non-streaming requests with big outputs can legitimately take >50s. Raise `REQUEST_DEADLINE_MS` (e.g. `90000`), or use `stream: true` so tokens arrive incrementally.
+3. **The 50s router deadline is shorter than the 55s retry budget.** This is already fixed in code: the retry loop now aligns to the router deadline and surfaces the real per-attempt error (e.g. a readable per-attempt timeout with hints) instead of the generic 502. If you still see the generic message on an old deployment, redeploy.
+
+Quick check: `GET /health` reports the effective outbound mode under `proxy.mode` (`direct` / `outbound` / `pool`) — if it says `direct` and you have no cookies, cause #1 applies to you.
+
 ### Requests hang / no response at all (local `deno run`)
 
 The adapter reads env config on every request. If you started the server without `--allow-env` (e.g. `deno run --allow-net deno/deploy.js`), the first request blocks on Deno's interactive permission prompt. In a terminal you'd see the prompt, but with background/piped output it is invisible — the server just never replies. Start with both flags (the entry now exits immediately with a clear error when permissions are missing):

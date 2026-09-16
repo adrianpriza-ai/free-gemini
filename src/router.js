@@ -458,7 +458,11 @@ export async function handleRequestSafe(request, envOrContext, ctx) {
       timer = setTimeout(function () {
         resolve(sendJSON({
           error: {
-            message: 'upstream timeout: no response within ' + deadlineMs + 'ms (REQUEST_DEADLINE_MS)',
+            message: 'upstream timeout: no response within ' + deadlineMs + 'ms (REQUEST_DEADLINE_MS)。' +
+              '常见原因：无 Cookie 的匿名直连容易被上游限流/挂起 —— 设置 COOKIE_STRING，' +
+              '或启用 ENABLE_PROXY=true / HTTPS_PROXY 换出口 IP；也可调大 REQUEST_DEADLINE_MS（毫秒，0 禁用）。' +
+              'Common causes: anonymous direct egress is throttled upstream — set COOKIE_STRING, ' +
+              'or enable ENABLE_PROXY=true / HTTPS_PROXY to rotate egress; or raise REQUEST_DEADLINE_MS (ms, 0 disables).',
             type: 'upstream_timeout',
           },
         }, 502));
