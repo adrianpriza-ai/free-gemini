@@ -60,19 +60,91 @@ var SUBREQUEST_BUDGET = {
 var PROXY_SOURCE_FETCH_TIMEOUT_MS = 8000; // 拉取代理列表源的硬超时
 var TUNNEL_HANDSHAKE_TIMEOUT_MS = 6000;   // 与代理建立 CONNECT/SOCKS 隧道的硬超时
 var POOL_REFRESH_MAX_SYNC_MS = 8000;      // 冷启动同步等待代理池刷新的上限，超时转后台
+var PROXY_BODY_IDLE_TIMEOUT_MS = 20000;   // 响应体空闲看门狗：上游/代理连续 N ms 不吐数据即断流报错
+
+// 🔍 TLS-MITM 代理识别
+//
+// 免费代理列表中混有大量"TLS 中间人"代理：CONNECT/SOCKS 隧道建立成功，但代理
+// 用自签 CA 伪造 gemini.google.com 的证书。这类代理：
+//   1. 连通性测试会通过（TCP + 隧道握手都成功）→ 进入代理池
+//   2. 真实请求时 startTls 证书校验失败（'invalid peer certificate: UnknownIssuer'）
+//      → 每个请求都要撞上它们、失败、轮换、降级，白白增加数秒延迟
+//
+// 解决：测试阶段就做真实的 TLS 握手，证书校验失败的代理一律不进池；请求期
+// 碰到 cert 类错误时立即移出代理池（不占轮换失败次数）。
+//
+// TLS-MITM proxy detection. Free proxy lists contain many "TLS man-in-the-middle"
+// proxies: the CONNECT/SOCKS tunnel succeeds but the proxy forges gemini.google.com
+// certificates with its own CA. Those pass the connectivity test, enter the pool,
+// then fail every real request at startTls with 'invalid peer certificate'.
+// Fix: perform a real TLS handshake during testing (cert verification failure =>
+// rejected) and evict cert-error proxies from the pool immediately at request time.
+var TLS_MITM_ERROR_PATTERNS = [
+  'invalid peer certificate',          // Deno / Rust rustls
+  'certificate',                        // 通用证书错误 / generic cert errors
+  'self-signed',                        // 自签证书 / self-signed certs
+  'unable to verify',                   // 无法校验 / verification failures
+];
+
+/**
+ * 判断错误是否为 TLS 证书校验失败（MITM 代理的特征）
+ * Whether an error is a TLS certificate verification failure (MITM proxy).
+ *
+ * @param {Error|string} err - 错误对象或消息 / error object or message
+ * @returns {boolean}
+ */
+function isTlsCertError(err) {
+  var msg = err && err.message ? String(err.message) : String(err || '');
+  var lower = msg.toLowerCase();
+  for (var i = 0; i < TLS_MITM_ERROR_PATTERNS.length; i++) {
+    if (lower.indexOf(TLS_MITM_ERROR_PATTERNS[i]) !== -1) return true;
+  }
+  return false;
+}
+
+// 🔍 响应体断流特征（黑洞代理：响应头正常、正文静默滞留后断开）
+// Body-stall signatures (blackhole proxies: headers fine, body stalls then dies).
+var BODY_STALL_ERROR_PATTERNS = [
+  '空闲超时',            // readWithWatchdog 抛出的空闲超时 / idle watchdog error
+  'idle timeout',
+  '代理响应流',           // 代理流相关错误 / proxy stream errors
+  '可能已断流',
+];
+
+/**
+ * 判断错误是否为响应体阶段断流（黑洞代理的特征）。
+ * 此类代理在 geminiFetch 拿到响应头时被记为"成功"，只有在调用方读 body 时
+ * 才暴露 —— 不在此处记账，它们会永久霸榜评分。
+ * Whether an error is a body-phase stall (blackhole proxy signature). Such
+ * proxies are counted as "successful" when geminiFetch receives the response
+ * headers and only fail when the caller reads the body — without accounting
+ * here they would keep the top score forever.
+ *
+ * @param {Error|string} err - 错误对象或消息 / error object or message
+ * @returns {boolean}
+ */
+function isBodyStallError(err) {
+  var msg = err && err.message ? String(err.message) : String(err || '');
+  var lower = msg.toLowerCase();
+  for (var i = 0; i < BODY_STALL_ERROR_PATTERNS.length; i++) {
+    if (lower.indexOf(BODY_STALL_ERROR_PATTERNS[i]) !== -1) return true;
+  }
+  return false;
+}
 
 /**
  * 读取挂起防护超时的默认值（src/config.js 构建 DEFAULT_CONFIG 时消费）
  * Read the hang-guard timeout defaults (consumed by src/config.js when
  * building DEFAULT_CONFIG, keeping a single source of truth in this module).
  *
- * @returns {Object} { sourceFetchMs, handshakeMs, refreshSyncMs }
+ * @returns {Object} { sourceFetchMs, handshakeMs, refreshSyncMs, bodyIdleMs }
  */
 export function getProxyTimeoutDefaults() {
   return {
     sourceFetchMs: PROXY_SOURCE_FETCH_TIMEOUT_MS,
     handshakeMs: TUNNEL_HANDSHAKE_TIMEOUT_MS,
     refreshSyncMs: POOL_REFRESH_MAX_SYNC_MS,
+    bodyIdleMs: PROXY_BODY_IDLE_TIMEOUT_MS,
   };
 }
 
@@ -660,11 +732,12 @@ function createRawDecoderStream(initialBuffer, rawReader, contentLength, watchdo
 
 /**
  * 自动连通性测试单个代理
- * 真实建立到 gemini.google.com:443 的握手隧道，测试延迟并验证连通性
- * 
+ * 真实建立到 gemini.google.com:443 的 TLS 隧道（含证书校验），测试延迟并验证连通性。
+ * 伪造证书的 MITM 代理会被拒绝（返回 mitm: true），不会进入代理池。
+ *
  * @param {Object} proxy - 代理对象
  * @param {number} timeoutMs - 超时毫秒数
- * @returns {Promise<{ok: boolean, latency?: number, error?: string}>}
+ * @returns {Promise<{ok: boolean, latency?: number, error?: string, mitm?: boolean}>}
  */
 async function testProxy(proxy, timeoutMs) {
   if (!connect) {
@@ -672,6 +745,7 @@ async function testProxy(proxy, timeoutMs) {
   }
   timeoutMs = timeoutMs || 2000;
   var socket = null;
+  var tlsSocket = null;
   var startTime = Date.now();
   var timer = null;
 
@@ -689,6 +763,20 @@ async function testProxy(proxy, timeoutMs) {
       } else {
         await establishHttpConnectTunnel(socket, 'gemini.google.com', 443, proxy.auth);
       }
+
+      // 🔍 TLS 握手验证（真实站点证书校验，SNI=gemini.google.com）：
+      // 与请求路径 fetchViaProxy 完全一致。伪造 gemini.google.com 证书的
+      // MITM 代理在这里直接抛证书错误，不会进入代理池 —— 否则每个真实
+      // 请求都要先撞它一次（失败→轮换→降级），白白增加数秒延迟。
+      // TLS handshake verification against the real site certificate
+      // (SNI=gemini.google.com), identical to the request path fetchViaProxy.
+      // MITM proxies with forged certs throw here and never enter the pool.
+      tlsSocket = await socket.startTls({ expectedServerHostname: 'gemini.google.com' });
+
+      // 📊 延迟样本包含隧道 + TLS 握手的完整耗时，与请求路径的统计口径一致，
+      // 评分排序更有意义。
+      // Latency sample covers tunnel + full TLS handshake, matching how the
+      // request path measures latency, so score-based rotation is meaningful.
       return true;
     })();
 
@@ -701,12 +789,19 @@ async function testProxy(proxy, timeoutMs) {
     await Promise.race([testPromise, timeoutPromise]);
     clearTimeout(timer);
     var latency = Date.now() - startTime;
+    try { if (tlsSocket) tlsSocket.close(); } catch (e) {}
     try { socket.close(); } catch (e) {}
     return { ok: true, latency: latency };
   } catch (err) {
     if (timer) clearTimeout(timer);
+    try { if (tlsSocket) tlsSocket.close(); } catch (e) {}
     if (socket) {
       try { socket.close(); } catch (e) {}
+    }
+    // 🔍 MITM 代理打上标记，让刷新循环把它们从候选列表中剔除
+    // Flag MITM proxies so the refresh loop can exclude them from candidates.
+    if (isTlsCertError(err)) {
+      return { ok: false, error: err.message, mitm: true };
     }
     return { ok: false, error: err.message };
   }
@@ -846,9 +941,24 @@ async function fetchViaProxy(url, options, proxy, config) {
       var contentLength = clHeader ? parseInt(clHeader, 10) : null;
 
       var bodyStream;
-      // 空闲看门狗：流式转发期间如果代理长时间不再吐数据（断流/黑洞），
-      // 抛错而不是永久挂起。取单次请求超时的 2 倍作为空闲上限。
+      // 空闲看门狗：流式转发期间如果代理连续 bodyIdleTimeoutMs 不吐数据
+      // （断流/黑洞），抛错而不是永久挂起，由上层轮换或降级直连接管。
+      //
+      // 旧实现固定取 requestTimeoutSec × 2（默认 56s）：Gemini 流式输出的
+      // 心跳/首包间隔远小于该值，56s 只会让坏代理拖住单个请求近一分钟才
+      // 报错。现改为独立可调的 PROXY_BODY_IDLE_TIMEOUT_MS（默认 20000ms），
+      // 显著缩短单代理最坏占用时间；设为 0 回落旧口径。
+      //
+      // Body idle watchdog: if the proxy stays silent for bodyIdleTimeoutMs
+      // mid-response (stall/blackhole), throw instead of hanging forever so
+      // the rotation loop (or direct fallback) can take over. Previously this
+      // was hard-wired to requestTimeoutSec × 2 (56s by default), letting a
+      // single dead proxy pin a request for nearly a minute; it is now an
+      // independent env-tunable knob (PROXY_BODY_IDLE_TIMEOUT_MS, default
+      // 20000ms). 0 falls back to the legacy 2 × requestTimeoutSec behavior.
       var idleWatchdog = function () {
+        var bodyIdleMs = config.proxy && config.proxy.bodyIdleTimeoutMs;
+        if (bodyIdleMs > 0) return bodyIdleMs;
         return (config.requestTimeoutSec || 28) * 1000 * 2;
       };
       if (isChunked) {
@@ -874,6 +984,33 @@ async function fetchViaProxy(url, options, proxy, config) {
       if (config._ctx && typeof config._ctx.waitUntil === 'function') {
         config._ctx.waitUntil(pipePromise.catch(function () {}));
       }
+
+      // 🔍 响应体阶段失败记账：响应头已返回后，失败发生在调用方读取 body 时
+      // （断流/空闲超时等），不会经过 geminiFetch 的轮换 catch —— 黑洞代理的
+      // fails 永远不增长，评分保持最高，每次重试都再选它。这里监听管道
+      // 错误，把失败记到对应代理头上：空闲断流直接移出代理池（该代理对
+      // Gemini 已不可用），其余错误计入正常失败额度。
+      //
+      // Body-phase failure accounting: after response headers are returned,
+      // failures happen while the caller reads the body (stall/idle timeout),
+      // never passing through geminiFetch's rotation catch — so a blackhole
+      // proxy's fail count stays 0, its score stays top, and every retry picks
+      // it again. Watch the pipe rejection here to charge the failure to the
+      // proxy: body-stall proxies are evicted immediately (they are useless
+      // for Gemini), other errors consume the normal fail budget.
+      pipePromise.catch(function (pipeErr) {
+        if (isBodyStallError(pipeErr)) {
+          var before = globalProxyState.proxies.length;
+          globalProxyState.proxies = globalProxyState.proxies.filter(function (p) {
+            return p !== proxy;
+          });
+          if (globalProxyState.proxies.length < before) {
+            log('代理 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + '] 响应体断流，已从代理池移除', 'WARN', config);
+          }
+        } else {
+          proxy.fails = (proxy.fails || 0) + 1;
+        }
+      });
 
       return new Response(downstream.readable, {
         status: statusCode,
@@ -1024,12 +1161,25 @@ export async function refreshProxyPool(config, env, ctx, force) {
     // 自动测试连通性
     if (config.proxy && config.proxy.autoTest) {
       var verified = [];
+      var mitmCount = 0;
       var batchSize = 6;
       var maxPool = config.proxy.maxPoolSize || 12;
-      var testTimeout = config.proxy.testTimeoutMs || 1000;
+      // 🔍 测试现包含真实 TLS 握手（证书校验），较纯隧道握手多一次往返。
+      // 默认值已从 1000ms 放宽到 2000ms（见 src/config.js）；显式配置的
+      // PROXY_TEST_TIMEOUT_MS 仍然生效，不做强制下限。
+      // The test now performs a real TLS handshake (cert verification) — one
+      // extra round trip vs the plain tunnel handshake. Default raised from
+      // 1000ms to 2000ms (see src/config.js); an explicit
+      // PROXY_TEST_TIMEOUT_MS is still honored, no forced floor.
+      var testTimeout = config.proxy.testTimeoutMs || 2000;
 
-      // 限制测试候选数量，防止超量消耗 Worker 资源
-      var toTest = candidates.slice(0, Math.min(candidates.length, maxPool * 2));
+      // 限制测试候选数量，防止超量消耗 Worker 资源。
+      // MITM 比例高时（免费源常见），有效通过率可能只有 ~50%，测试窗口放大
+      // 到 maxPool*4 以免池子填不满。
+      // Cap the number of tested candidates. With a high MITM ratio (common in
+      // free lists, ~50% pass rate) the window is widened to maxPool*4 so the
+      // pool can still fill up.
+      var toTest = candidates.slice(0, Math.min(candidates.length, maxPool * 4));
 
       // 📊 预算状态：刷新子请求（拉源 fetch + 每个代理测试的 connect()）共享一个上限，
       // 且整个调用有硬上限。触及任一上限即停止测试，把子请求额度留给真正的 Gemini 请求。
@@ -1061,6 +1211,10 @@ export async function refreshProxyPool(config, env, ctx, force) {
             cand.latency = tr.value.result.latency;
             cand.fails = 0;
             verified.push(cand);
+          } else if (tr.status === 'fulfilled' && tr.value.result.mitm) {
+            // 🔍 伪造证书的 MITM 代理：仅计数，不进池，也不影响其他候选的测试。
+            // Forged-cert MITM proxy: counted only, never pooled.
+            mitmCount++;
           }
         }
       }
@@ -1068,6 +1222,9 @@ export async function refreshProxyPool(config, env, ctx, force) {
       // 按延迟从低到高升序排列（优选低延迟代理）
       verified.sort(function (a, b) { return a.latency - b.latency; });
       globalProxyState.proxies = verified;
+      if (mitmCount > 0) {
+        log('检测到 ' + mitmCount + ' 个 TLS-MITM 代理（伪造 gemini.google.com 证书），已从候选中剔除', 'WARN', config);
+      }
       log('代理测试完成，有效代理数量: ' + verified.length, 'INFO', config);
     } else {
       globalProxyState.proxies = candidates.slice(0, config.proxy.maxPoolSize || 12).map(function (c) {
@@ -1169,6 +1326,20 @@ export async function geminiFetch(url, options, config) {
   var usableProxies = globalProxyState.proxies;
   var budgetState = getBudgetState(config);
 
+  // ⏱️ 整个代理轮换阶段的时间预算：失败轮换的总耗时（含每次尝试的建连、
+  // 隧道、TLS 与响应头等待）不得超过此上限，避免"逐个试 3 个死代理"把
+  // 单个请求拖到数十秒。超时后立即放弃剩余代理尝试，转直连兜底（若启用）。
+  // 耗时主要发生在拿到响应头之前，因此不影响已开始流式传输的响应体。
+  // ⏱️ Time budget for the whole proxy rotation phase: total time spent on
+  // failed rotations (connect + tunnel + TLS + awaiting response headers per
+  // attempt) must not exceed this cap, so "try 3 dead proxies one by one"
+  // cannot drag a single request out for tens of seconds. Past the cap the
+  // remaining proxy attempts are abandoned in favor of the direct fallback.
+  // Time is consumed before response headers arrive, so an already-streaming
+  // body is unaffected.
+  var PROXY_ROTATION_BUDGET_MS = (config.proxy && config.proxy.bodyIdleTimeoutMs || 20000) * 2;
+  var rotationDeadline = Date.now() + PROXY_ROTATION_BUDGET_MS;
+
   // 📊 无代理时优先走直连（计 1 个子请求）
   if (!usableProxies || usableProxies.length === 0) {
     if (config.proxy.fallbackDirect) {
@@ -1245,6 +1416,18 @@ export async function geminiFetch(url, options, config) {
       return fetch(url, options);
     }
 
+    // ⏱️ 轮换时间预算检查：剩余时间不足以完成一次有意义的尝试时，
+    // 不再开始新的代理尝试，直接转直连（若启用），保证请求总时长可控。
+    // ⏱️ Rotation time budget check: when the remaining budget cannot fit a
+    // meaningful attempt, skip to the direct fallback (if enabled) so total
+    // request duration stays bounded.
+    var rotationRemaining = rotationDeadline - Date.now();
+    if (rotationRemaining < 1000 && config.proxy.fallbackDirect) {
+      log('代理轮换时间预算耗尽（' + PROXY_ROTATION_BUDGET_MS + 'ms），跳过剩余代理尝试，降级直连', 'WARN', config);
+      trackSubrequest(config, 'main');
+      return fetch(url, options);
+    }
+
     try {
       log('通过代理 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + '] 发送请求', 'INFO', config);
       budgetState.totalUsed += 1; // 每次代理尝试消耗 1 个子请求（connect()）
@@ -1261,11 +1444,25 @@ export async function geminiFetch(url, options, config) {
     } catch (err) {
       log('代理请求失败 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + ']: ' + err.message, 'WARN', config);
       lastError = err;
-      proxy.fails = (proxy.fails || 0) + 1;
-      if (proxy.fails >= 2) {
+
+      // 🔍 TLS 证书错误 = 伪造 gemini.google.com 证书的 MITM 代理。
+      // 这类代理对 Gemini 永远不可用，重试没有意义 —— 立即移出代理池，
+      // 不占用轮换失败额度（正常代理仍保留两次机会的容错）。
+      // TLS cert errors mean a MITM proxy forging gemini.google.com certs.
+      // It can never serve Gemini traffic, so retrying is pointless: evict it
+      // from the pool immediately without consuming its 2-strike fail budget.
+      if (isTlsCertError(err)) {
         globalProxyState.proxies = globalProxyState.proxies.filter(function (p) {
           return p !== proxy;
         });
+        log('检测到 TLS-MITM 代理 [' + proxy.protocol + '://' + proxy.host + ':' + proxy.port + ']，已从代理池移除', 'WARN', config);
+      } else {
+        proxy.fails = (proxy.fails || 0) + 1;
+        if (proxy.fails >= 2) {
+          globalProxyState.proxies = globalProxyState.proxies.filter(function (p) {
+            return p !== proxy;
+          });
+        }
       }
     }
   }

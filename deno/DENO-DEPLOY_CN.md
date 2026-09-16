@@ -64,6 +64,7 @@ deno deploy env add API_KEY "sk-your-key" --secret
 | `GEMINI_BL` | String | Gemini 网页版构建标签（如 `boq_assistant-bard-web-server_...`）。 | 内置最新 |
 | `RATE_LIMIT_MAX` | Number | 时间窗口内单 IP 最大请求数。 | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | 速率限制窗口（秒）。 | `60` |
+| `REQUEST_DEADLINE_MS` | Number | 服务端单请求总截止时间（毫秒）：上游响应未按时就位时立即返回结构化 502（`upstream_timeout`），而不是挂起。部署在 Deno Deploy 时建议低于平台 55s 响应头限制。`0` 禁用 | `50000` |
 | `ENABLE_PROXY` | String | 启用轮换式**代理池**（Deno 提供原始 TCP Socket，可用）。 | `false` |
 | `HTTPS_PROXY` | String | 静态出站代理地址（如 `http://user:pass@proxy:port`）。Deno 的 `fetch()` 原生读取 `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`，直连请求自动经代理隧道发出；`HTTP_PROXY` 与 `ALL_PROXY` 同样生效。 | 直连 |
 
@@ -156,11 +157,21 @@ deno run --allow-net --allow-env deno/deploy.js
 # 或者: npm run dev:deno
 ```
 
-服务默认启动在 `http://localhost:8000`（`Deno.serve` 默认端口；可用 `--port 8081` 或 `DENO_PORT` 修改）。
+服务默认启动在 `http://localhost:8000`（`Deno.serve` 默认端口；通过 `DENO_PORT` 环境变量修改，如 `DENO_PORT=8081 deno run ...`）。
+
+> ⚠️ **务必带上 `--allow-env`**：适配器在请求时读取环境变量配置。只给 `--allow-net` 的话，第一个请求会卡在 Deno 的交互式权限确认上 —— 后台/管道运行时提示不可见，所有请求表现为永久挂起。入口现在会在启动时自检权限并直接报错退出。
 
 ---
 
 ## 🚨 常见问题排查
+
+### 请求挂起 / 完全无响应（本地 `deno run`）
+
+适配器每次请求都要读取环境变量。如果启动时漏掉 `--allow-env`（如 `deno run --allow-net deno/deploy.js`），第一个请求会阻塞在 Deno 的交互式权限确认上。终端前台能看到提示，但后台/管道运行时提示不可见 —— 服务就是"永远不回复"。请始终用两个权限标志启动（入口现在会在权限缺失时立即报错退出）：
+
+```bash
+deno run --allow-net --allow-env deno/deploy.js
+```
 
 ### `TLS proxying is not allowed` / 连接 443 端口报错
 

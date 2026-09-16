@@ -7,6 +7,7 @@
 //   - 新版 Deno Deploy (console.deno.com, Deno 2.x)：入口文件用 Deno.serve()
 //     启动 HTTP 服务（旧版 Deploy Classic 已于 2026-07-20 停服）
 //   - 本地开发：deno run --allow-net --allow-env deno/deploy.js
+//     （启动时会自检权限，缺 --allow-env 直接报错退出，见 assertLocalPermissions）
 //
 // 平台特性 / Platform traits:
 //   - 提供原始 TCP socket（Deno.connect，经 deno/sockets.js 包装）→ 支持完整代理池
@@ -38,10 +39,80 @@ export async function handler(request) {
   return run(request, null, null);
 }
 
+// 🛡️ 本地启动自检：权限不足立即报错退出，绝不在第一个请求里静默挂起
+//
+// 背景：本地 `deno run --allow-net deno/deploy.js`（漏掉 --allow-env）时，首个
+// 请求会调用 Deno.env.toObject()（src/platform.js 的 mergePlatformEnv），Deno
+// 此时在终端等待交互式权限确认。后台/管道运行下提示不可见，请求表现为
+// "永久挂起、无任何响应"（55s 响应头截止时间也无法触发，因为执行流停在
+// 权限等待上）。启动时同步自检可以把问题提前到进程启动阶段暴露。
+//
+// Local startup self-check: exit immediately when permissions are missing.
+// Without --allow-env the first request blocks on Deno's interactive permission
+// prompt inside Deno.env.toObject() — invisible in background/pipe contexts,
+// so every request looks like an infinite hang. Checking synchronously at
+// startup surfaces the problem before the server accepts any traffic.
+//
+// Deno Deploy 的权限模型不同（env 始终可读、无交互确认），Deno.permissions
+// 不可用或查询失败时静默跳过，不影响平台部署。
+// On Deno Deploy the permission model differs (env is always readable); skip
+// silently when Deno.permissions is unavailable or the query fails.
+if (typeof Deno !== 'undefined' && Deno.permissions && typeof Deno.permissions.querySync === 'function') {
+  var PERMISSION_REQUIREMENTS = [
+    { name: 'net', usage: '监听 HTTP 端口 / listen for HTTP' },
+    { name: 'env', usage: '读取环境变量配置 / read env config (API_KEY 等)' },
+  ];
+  for (var _pi = 0; _pi < PERMISSION_REQUIREMENTS.length; _pi++) {
+    var _perm = PERMISSION_REQUIREMENTS[_pi];
+    var _state;
+    try {
+      _state = Deno.permissions.querySync({ name: _perm.name });
+    } catch (_permErr) {
+      break; // 查询不可用则不拦截 / query unavailable, don't block startup
+    }
+    if (_state && _state.state !== 'granted') {
+      console.error('');
+      console.error('❌ 缺少权限 --' + _perm.name + ' (' + _perm.usage + ')');
+      console.error('❌ Missing permission --' + _perm.name + ' (' + _perm.usage + ')');
+      console.error('');
+      console.error('  请使用以下命令启动 / start with:');
+      console.error('');
+      console.error('    deno run --allow-net --allow-env deno/deploy.js');
+      console.error('');
+      console.error('  （当前状态: ' + _perm.name + '=' + _state.state + '；以 --no-prompt 运行时权限请求会被直接拒绝，同样无法工作）');
+      console.error('  (current state: ' + _perm.name + '=' + _state.state + '; with --no-prompt the implicit request is denied, which also cannot work)');
+      Deno.exit(1);
+    }
+  }
+}
+
 // 🚀 HTTP 服务入口（Deno Deploy 与本地开发共用）
 // HTTP server entry, shared by Deno Deploy and local development.
+//
+// 端口：Deno.serve(handler) 默认固定 8000，不读取 --port/DENO_PORT（那是
+// `deno serve` 子命令的行为）。为兑现文档承诺，这里在权限自检通过后读取
+// DENO_PORT 环境变量显式传给 Deno.serve（0/非法值回落默认 8000）。
+// Port: Deno.serve(handler) always defaults to 8000 and ignores --port and
+// DENO_PORT (those belong to the `deno serve` subcommand). To match the docs,
+// DENO_PORT is read explicitly and passed as a serve option (invalid/0 falls
+// back to the default 8000).
 if (typeof Deno !== 'undefined' && typeof Deno.serve === 'function') {
-  Deno.serve(handler);
+  var serveOptions = {};
+  try {
+    var denoPort = parseInt(Deno.env.get('DENO_PORT'), 10);
+    if (!isNaN(denoPort) && denoPort > 0 && denoPort < 65536) {
+      serveOptions.port = denoPort;
+    }
+  } catch (portErr) {
+    // 无 env 权限（理论不可达：上方自检已拦截）→ 用默认端口
+    // No env permission (unreachable after the self-check) → default port
+  }
+  // 注意签名：Deno.serve(options, handler) —— options 在前；
+  // Deno.serve(handler, options) 不是合法重载，options 会被静默忽略。
+  // Note the signature: Deno.serve(options, handler) — options first.
+  // Deno.serve(handler, options) is not a valid overload; options would be
+  // silently ignored and the server would bind the default port.
+  Deno.serve(serveOptions, handler);
 }
 
 // ⏰ 定时任务调度器（Deno Deploy 的 Cron 触发器会调用 handleScheduled）

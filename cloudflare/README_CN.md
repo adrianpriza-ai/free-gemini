@@ -160,6 +160,7 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 | `RETRY_ATTEMPTS` | 重试次数 | `3` |
 | `RETRY_DELAY_SEC` | 重试间隔（秒） | `2` |
 | `REQUEST_TIMEOUT_SEC` | 请求超时（秒） | `28` |
+| `REQUEST_DEADLINE_MS` | 服务端单请求总截止时间（毫秒）：上游响应未按时就位时立即返回结构化 502（`upstream_timeout`），抢在客户端超时或平台限制之前。`0` 禁用 | `50000` |
 | `FINGERPRINT_JITTER_MS` | 随机延迟最大值（毫秒） | `1500` |
 | `RATE_LIMIT_MAX` | 速率限制最大请求数 | `3000` |
 | `RATE_LIMIT_WINDOW` | 速率限制时间窗口（秒） | `60` |
@@ -172,8 +173,8 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 | `PROXY_SOURCE_URL` | 主代理源 URL（ProxyScrape 200ms API） | `https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text&timeout=200` |
 | `PROXY_FALLBACK_SOURCE_URL` | 备用代理源 URL（GitHub 完整源） | `https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt` |
 | `STATIC_PROXIES` / `PROXY_URL` | 自定义固定代理（逗号或换行分隔，如 `http://user:pass@ip:port`, `socks5://ip:port`） | 空 |
-| `AUTO_TEST_PROXY` | 加入代理池前自动进行连通性测试 | `true` |
-| `PROXY_TEST_TIMEOUT_MS` | 单个代理测试握手超时时间（毫秒） | `1000` |
+| `AUTO_TEST_PROXY` | 加入代理池前自动进行连通性测试（含真实 TLS 握手，伪造 `gemini.google.com` 证书的 MITM 代理会被拒绝） | `true` |
+| `PROXY_TEST_TIMEOUT_MS` | 单个代理测试超时时间（毫秒），覆盖隧道 + TLS 握手 | `2000` |
 | `PROXY_UPDATE_INTERVAL_HOURS` | 代理池自动更新周期（小时） | `24` |
 | `PROXY_MAX_POOL_SIZE` | 代理池保留的最大可用代理数 | `12` |
 | `PROXY_FALLBACK_DIRECT` | 代理全部失效时是否自动降级回退到直连 | `true` |
@@ -181,6 +182,7 @@ curl -N https://你的worker.workers.dev/v1/chat/completions \
 | `PROXY_SOURCE_FETCH_TIMEOUT_MS` | 拉取代理列表源的硬超时（毫秒）— 防止源站无响应导致请求挂起 | `8000` |
 | `PROXY_HANDSHAKE_TIMEOUT_MS` | 与单个代理建立 CONNECT/SOCKS 隧道的硬超时（毫秒）— 死代理快速失败而不是拖住请求 | `6000` |
 | `PROXY_REFRESH_SYNC_MS` | 冷启动同步等待代理池刷新的上限（毫秒）— 超时后刷新转后台，本次请求走直连 | `8000` |
+| `PROXY_BODY_IDLE_TIMEOUT_MS` | 响应体空闲看门狗（毫秒）：代理转发期间上游/代理连续 N ms 不吐数据即断流报错 — 单个死代理不再能拖住请求近 56 秒。另由此派生代理轮换总时间预算（2× 该值），限制失败轮换拖延请求的总时长，超时直接降级直连。`0` 回落旧行为（2× `REQUEST_TIMEOUT_SEC`） | `20000` |
 
 #### 代理轮询模式
 

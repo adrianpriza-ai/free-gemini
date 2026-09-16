@@ -89,8 +89,8 @@ Core feature list:
        - In-memory candidate caching: the parsed proxy list is cached per Worker Isolate (free, no KV cost). TTL aligns with the update interval so repeated refresh attempts within one cycle skip both the ProxyScrape and GitHub raw fetches. Empty results are never cached
        - Automatically refresh proxy pool every 24 hours (supports Cloudflare Cron timed trigger & on-demand background asynchronous update)
        - Supports Cloudflare KV persistent caching (shared tested proxies across multiple instances)
-       - Automatic failover: single proxy request failure automatically rotates to next, all proxies failure automatically falls back to direct connection, ensuring service high availability
-       - Default per-proxy handshake test timeout is 1000ms (configurable via PROXY_TEST_TIMEOUT_MS)
+       - Automatic failover: single proxy request failure automatically rotates to next, all proxies failure automatically falls back to direct connection, ensuring service high availability        - Per-proxy test performs a real TLS handshake (cert verification), rejecting TLS-MITM proxies with forged gemini.google.com certificates
+        - Default per-proxy test timeout (tunnel + TLS handshake) is 2000ms (configurable via PROXY_TEST_TIMEOUT_MS)
 
 
 ## Deployment Instructions:

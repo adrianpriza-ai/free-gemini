@@ -160,6 +160,7 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 | `RETRY_ATTEMPTS` | Retry attempts | `3` |
 | `RETRY_DELAY_SEC` | Retry interval (seconds) | `2` |
 | `REQUEST_TIMEOUT_SEC` | Request timeout (seconds) | `28` |
+| `REQUEST_DEADLINE_MS` | Server-side per-request deadline (ms): return a structured 502 (`upstream_timeout`) instead of hanging when the upstream response is not ready in time — fires before client timeouts or platform limits. `0` disables | `50000` |
 | `FINGERPRINT_JITTER_MS` | Random delay maximum value (milliseconds) | `1500` |
 | `RATE_LIMIT_MAX` | Rate limit maximum request count | `3000` |
 | `RATE_LIMIT_WINDOW` | Rate limit time window (seconds) | `60` |
@@ -172,8 +173,8 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 | `PROXY_SOURCE_URL` | Primary proxy source URL (ProxyScrape 200ms API) | `https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text&timeout=200` |
 | `PROXY_FALLBACK_SOURCE_URL` | Fallback proxy source URL (GitHub raw full list) | `https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt` |
 | `STATIC_PROXIES` / `PROXY_URL` | Custom fixed proxies (comma/newline separated, e.g. `http://user:pass@ip:port`, `socks5://ip:port`) | (empty) |
-| `AUTO_TEST_PROXY` | Auto-test proxies before adding to verified pool | `true` |
-| `PROXY_TEST_TIMEOUT_MS` | Per-proxy connection test timeout (ms) | `1000` |
+| `AUTO_TEST_PROXY` | Auto-test proxies before adding to verified pool (includes a real TLS handshake; TLS-MITM proxies with forged `gemini.google.com` certificates are rejected) | `true` |
+| `PROXY_TEST_TIMEOUT_MS` | Per-proxy connection test timeout (ms), covers tunnel + TLS handshake | `2000` |
 | `PROXY_UPDATE_INTERVAL_HOURS` | Proxy pool auto-update interval (hours) | `24` |
 | `PROXY_MAX_POOL_SIZE` | Maximum verified proxies to keep in pool | `12` |
 | `PROXY_FALLBACK_DIRECT` | Fall back to direct connection if all proxies fail | `true` |
@@ -181,6 +182,7 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 | `PROXY_SOURCE_FETCH_TIMEOUT_MS` | Hard timeout for fetching the proxy list source (ms) — prevents a stalled source from hanging the request | `8000` |
 | `PROXY_HANDSHAKE_TIMEOUT_MS` | Hard timeout for the CONNECT/SOCKS tunnel handshake per proxy (ms) — dead proxies fail fast instead of stalling | `6000` |
 | `PROXY_REFRESH_SYNC_MS` | Max synchronous wait for the cold-start pool refresh (ms) — past this the refresh continues in the background and the request goes direct | `8000` |
+| `PROXY_BODY_IDLE_TIMEOUT_MS` | Body idle watchdog (ms): abort a proxied request if the upstream/proxy sends nothing for this long mid-response — a single dead proxy can no longer pin a request for ~56s. Also derived from it: the total proxy-rotation time budget (2× this value) bounds how long failed proxy attempts can delay a request before falling back to direct. `0` restores the legacy 2× `REQUEST_TIMEOUT_SEC` behavior | `20000` |
 
 #### Proxy Rotation Modes
 

@@ -38,6 +38,20 @@ export var DEFAULT_CONFIG = {
   // 但初始连接和第一个数据块必须在超时内到达
   requestTimeoutSec: 28,
 
+  // -- 单请求总截止时间（毫秒）
+  // 服务端兜底：一个请求从进入路由到拿到上游响应的总耗时上限。超时立即
+  // 返回结构化的 502（upstream_timeout），而不是让客户端等到自身超时或
+  // 收到平台通用错误页。0 = 禁用截止逻辑。
+  // 各平台硬限制参考：Deno Deploy 55s（deploy.js 调 setPreresponseDeadline）、
+  // Vercel Edge 22s、Netlify Edge 30s —— 部署在这些平台时应设置更小的值。
+  // Server-side per-request deadline (ms): total time from entering the router
+  // to obtaining the upstream response. On expiry a structured 502
+  // (upstream_timeout) is returned instead of letting the client time out or
+  // hit a generic platform error page. 0 = disabled. Platform hard limits for
+  // reference: Deno Deploy 55s, Vercel Edge 22s, Netlify Edge 30s — use a
+  // smaller value when deploying there.
+  requestDeadlineMs: 50000,
+
   // -- Gemini 构建标签
   // Gemini 前端的版本标识，用于 API 请求的 URL 参数
   // 如果遇到 405 Method Not Allowed 错误，说明此值已过期
@@ -129,10 +143,13 @@ export var DEFAULT_CONFIG = {
     fallbackSourceUrl: 'https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/proxies/all/data.txt',
     // 用户自定义固定代理列表（支持 http/socks5，以逗号、竖线或换行分隔）
     staticProxies: [],
-    // 自动测试代理开关（通过 cloudflare:sockets 握手验证可用性）
+    // 自动测试代理开关（通过原始 TCP socket 建立到 gemini.google.com:443 的
+    // 真实 TLS 隧道验证可用性，伪造证书的 MITM 代理会被拒绝）
     autoTest: true,
-    // 单个代理连接与握手测试超时（毫秒）
-    testTimeoutMs: 1000,
+    // 单个代理连接 + 隧道 + TLS 握手测试超时（毫秒）。
+    // 默认从 1000 放宽到 2000：测试现含真实 TLS 握手（证书校验），
+    // 多一次往返，1000ms 会把部分正常代理误判为超时。
+    testTimeoutMs: 2000,
     // 代理池最大保留数量（避免占用过多 Worker 内存；也限制刷新时的代理测试子请求数）
     maxPoolSize: 12,
     // 代理池更新间隔时间（小时，默认 24 小时）
@@ -143,9 +160,12 @@ export var DEFAULT_CONFIG = {
     //   sourceFetchTimeoutMs: 拉取代理列表源的硬超时（PROXY_SOURCE_FETCH_TIMEOUT_MS）
     //   handshakeTimeoutMs:   与代理建立 CONNECT/SOCKS 隧道的硬超时（PROXY_HANDSHAKE_TIMEOUT_MS）
     //   refreshSyncMs:        冷启动同步等待代理池刷新的上限，超时转后台（PROXY_REFRESH_SYNC_MS）
+    //   bodyIdleTimeoutMs:    响应体空闲看门狗，上游/代理连续 N ms 不吐数据即断流报错
+    //                         （PROXY_BODY_IDLE_TIMEOUT_MS，0 = 回落 2×requestTimeoutSec）
     sourceFetchTimeoutMs: proxyTimeoutDefaults.sourceFetchMs,
     handshakeTimeoutMs: proxyTimeoutDefaults.handshakeMs,
     refreshSyncMs: proxyTimeoutDefaults.refreshSyncMs,
+    bodyIdleTimeoutMs: proxyTimeoutDefaults.bodyIdleMs,
     // 代理轮询方式（PROXY_ROTATION_MODE 环境变量覆盖）：
     //   'round-robin'  严格顺序轮询（公平，无质量感知）
     //   'random'       纯均匀随机
@@ -206,6 +226,7 @@ export function getRequestConfig(env, ctx) {
     retryAttempts: DEFAULT_CONFIG.retryAttempts,
     retryDelaySec: DEFAULT_CONFIG.retryDelaySec,
     requestTimeoutSec: DEFAULT_CONFIG.requestTimeoutSec,
+    requestDeadlineMs: DEFAULT_CONFIG.requestDeadlineMs,
     geminiBl: DEFAULT_CONFIG.geminiBl,
     authUser: DEFAULT_CONFIG.authUser,
     xsrfToken: DEFAULT_CONFIG.xsrfToken,
@@ -242,6 +263,7 @@ export function getRequestConfig(env, ctx) {
       sourceFetchTimeoutMs: DEFAULT_CONFIG.proxy.sourceFetchTimeoutMs,
       handshakeTimeoutMs: DEFAULT_CONFIG.proxy.handshakeTimeoutMs,
       refreshSyncMs: DEFAULT_CONFIG.proxy.refreshSyncMs,
+      bodyIdleTimeoutMs: DEFAULT_CONFIG.proxy.bodyIdleTimeoutMs,
     },
   };
 
@@ -373,6 +395,13 @@ export function getRequestConfig(env, ctx) {
     var rt = parseInt(env.REQUEST_TIMEOUT_SEC, 10);
     if (!isNaN(rt)) config.requestTimeoutSec = rt;
   }
+  // -- 单请求总截止时间（毫秒）：>0 生效；0 显式禁用；非法值静默忽略
+  // Per-request deadline (ms): >0 takes effect; 0 explicitly disables;
+  // invalid values are silently ignored.
+  if (env.REQUEST_DEADLINE_MS !== undefined && String(env.REQUEST_DEADLINE_MS).trim() !== '') {
+    var rdl = parseInt(env.REQUEST_DEADLINE_MS, 10);
+    if (!isNaN(rdl) && rdl >= 0) config.requestDeadlineMs = rdl;
+  }
   // 指纹轮换随机延迟配置
   if (env.FINGERPRINT_JITTER_MS) {
     var fj = parseInt(env.FINGERPRINT_JITTER_MS, 10);
@@ -432,6 +461,13 @@ export function getRequestConfig(env, ctx) {
   if (env.PROXY_REFRESH_SYNC_MS) {
     var prsm = parseInt(env.PROXY_REFRESH_SYNC_MS, 10);
     if (!isNaN(prsm) && prsm > 0) config.proxy.refreshSyncMs = prsm;
+  }
+  // 响应体空闲看门狗（毫秒）：>0 生效；0 为显式回落旧口径（2×requestTimeoutSec）
+  // Body idle watchdog (ms): >0 takes effect; 0 explicitly restores the legacy
+  // 2×requestTimeoutSec behavior. Invalid values are silently ignored.
+  if (env.PROXY_BODY_IDLE_TIMEOUT_MS !== undefined && String(env.PROXY_BODY_IDLE_TIMEOUT_MS).trim() !== '') {
+    var pbit = parseInt(env.PROXY_BODY_IDLE_TIMEOUT_MS, 10);
+    if (!isNaN(pbit) && pbit >= 0) config.proxy.bodyIdleTimeoutMs = pbit;
   }
   if (env.PROXY_FALLBACK_DIRECT !== undefined) {
     config.proxy.fallbackDirect = String(env.PROXY_FALLBACK_DIRECT).toLowerCase() === 'true' || env.PROXY_FALLBACK_DIRECT === '1';

@@ -160,6 +160,8 @@ export async function handleRequest(request, envOrContext, ctx) {
             sourceFetchMs: config.proxy.sourceFetchTimeoutMs,
             handshakeMs: config.proxy.handshakeTimeoutMs,
             refreshSyncMs: config.proxy.refreshSyncMs,
+            bodyIdleMs: config.proxy.bodyIdleTimeoutMs,
+            requestDeadlineMs: config.requestDeadlineMs,
           },
         },
       });
@@ -273,6 +275,7 @@ export async function handleRequest(request, envOrContext, ctx) {
               sourceFetchMs: config.proxy.sourceFetchTimeoutMs,
               handshakeMs: config.proxy.handshakeTimeoutMs,
               refreshSyncMs: config.proxy.refreshSyncMs,
+              bodyIdleMs: config.proxy.bodyIdleTimeoutMs,
             },
             candidatesCache: {
               size: globalProxyState.candidatesCache ? globalProxyState.candidatesCache.length : 0,
@@ -410,15 +413,60 @@ export async function handleScheduled(event, env, ctx) {
   }
 }
 
-// 🛡️ 顶层兜底异常处理
-// Netlify/Vercel 对未捕获异常会返回非 JSON 的通用错误页（无 CORS 头、客户端
-// 无法解析），这里捕获所有未被上层捕获的异常，转换为结构化的 500 JSON 响应。
-// Top-level catch-all: convert unhandled errors into a structured JSON 500.
+// 🛡️ 顶层兜底异常处理 + 单请求服务端截止时间
+//
+// 两层保护：
+// 1. 异常兜底：Netlify/Vercel 对未捕获异常会返回非 JSON 的通用错误页（无
+//    CORS 头、客户端无法解析），这里捕获所有未被上层捕获的异常，转换为
+//    结构化的 500 JSON 响应。
+// 2. 截止时间：requestDeadlineMs（REQUEST_DEADLINE_MS 可调，0 禁用）内未能
+//    拿到上游响应时，立即返回结构化的 502（upstream_timeout），抢在客户端
+//    自身超时或平台硬限制之前给出可解析的错误。SSE 流式响应不受影响 ——
+//    截止只约束"响应头就位"，流已经开始后计时器即失效。
+//
+// Top-level catch-all + per-request server-side deadline.
+// 1. Catch-all: convert unhandled errors into a structured JSON 500 (platforms
+//    like Netlify/Vercel would otherwise return a generic non-JSON error page).
+// 2. Deadline: if the upstream response (i.e. response headers) is not ready
+//    within requestDeadlineMs (env REQUEST_DEADLINE_MS, 0 disables), return a
+//    structured 502 (upstream_timeout) before the client's own timeout or the
+//    platform's hard limit kicks in. SSE streaming is unaffected: the deadline
+//    only gates "headers ready" — once the response has started, it is moot.
+//
 // 参数兼容两种调用约定：Cloudflare fetch(request, env, ctx) 与
 // Netlify/Vercel handler(request, context)（后者传 envOrContext=null）。
+// Accepts both calling conventions: Cloudflare fetch(request, env, ctx) and
+// Netlify/Vercel handler(request, context) (envOrContext=null in the latter).
 export async function handleRequestSafe(request, envOrContext, ctx) {
+  var deadlineMs = 0;
   try {
-    return await handleRequest(request, envOrContext, ctx);
+    var cfg = getRequestConfig(envOrContext && typeof envOrContext === 'object' && !envOrContext.geo && !envOrContext.next ? envOrContext : null, ctx);
+    deadlineMs = cfg.requestDeadlineMs || 0;
+  } catch (cfgErr) {
+    deadlineMs = 0; // 配置异常时退化为仅异常兜底 / config failure: catch-all only
+  }
+
+  var timer = null;
+  try {
+    var workPromise = handleRequest(request, envOrContext, ctx);
+
+    if (deadlineMs <= 0) {
+      return await workPromise;
+    }
+
+    var deadlinePromise = new Promise(function (resolve) {
+      timer = setTimeout(function () {
+        resolve(sendJSON({
+          error: {
+            message: 'upstream timeout: no response within ' + deadlineMs + 'ms (REQUEST_DEADLINE_MS)',
+            type: 'upstream_timeout',
+          },
+        }, 502));
+      }, deadlineMs);
+    });
+
+    var outcome = await Promise.race([workPromise, deadlinePromise]);
+    return outcome;
   } catch (error) {
     var errMsg = error && error.message ? error.message : String(error);
     try { log('Unhandled error: ' + errMsg, 'ERROR', null); } catch (logErr) {}
@@ -428,5 +476,7 @@ export async function handleRequestSafe(request, envOrContext, ctx) {
         type: 'internal_error',
       },
     }, 500);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

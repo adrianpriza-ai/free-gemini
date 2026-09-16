@@ -64,6 +64,7 @@ Configure these in Deno Deploy: **app settings → Add/Edit environment variable
 | `GEMINI_BL` | String | Gemini web build label (e.g. `boq_assistant-bard-web-server_...`). | built-in latest |
 | `RATE_LIMIT_MAX` | Number | Max requests per IP in the window. | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | Rate limit window in seconds. | `60` |
+| `REQUEST_DEADLINE_MS` | Number | Server-side per-request deadline (ms): returns a structured 502 (`upstream_timeout`) instead of hanging when the upstream response is not ready in time. Keep below the platform's 55s response-header limit. `0` disables | `50000` |
 | `ENABLE_PROXY` | String | Enables the rotating **proxy pool** (`Deno.connect` raw sockets are available on Deno). | `false` |
 | `HTTPS_PROXY` | String | Static outbound proxy URL (e.g. `http://user:pass@proxy:port`). Deno's `fetch()` reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` natively, so direct requests are tunneled automatically. `HTTP_PROXY` and `ALL_PROXY` are also honored. | none (direct) |
 
@@ -156,11 +157,21 @@ deno run --allow-net --allow-env deno/deploy.js
 # or: npm run dev:deno
 ```
 
-The server starts at `http://localhost:8000` (`Deno.serve`'s default port; use `--port 8081` or set `DENO_PORT` to change it).
+The server starts at `http://localhost:8000` (`Deno.serve`'s default port; set the `DENO_PORT` environment variable, e.g. `DENO_PORT=8081 deno run ...`, to change it).
+
+> ⚠️ **Always pass `--allow-env`**: the adapter reads config from environment variables at request time. Running with only `--allow-net` makes the first request block on Deno's interactive permission prompt — in a background/pipe context that prompt is invisible and every request appears to hang forever. The entry now self-checks permissions at startup and exits with a clear message instead.
 
 ---
 
 ## 🚨 Troubleshooting
+
+### Requests hang / no response at all (local `deno run`)
+
+The adapter reads env config on every request. If you started the server without `--allow-env` (e.g. `deno run --allow-net deno/deploy.js`), the first request blocks on Deno's interactive permission prompt. In a terminal you'd see the prompt, but with background/piped output it is invisible — the server just never replies. Start with both flags (the entry now exits immediately with a clear error when permissions are missing):
+
+```bash
+deno run --allow-net --allow-env deno/deploy.js
+```
 
 ### `TLS proxying is not allowed` / connection errors to port 443
 
