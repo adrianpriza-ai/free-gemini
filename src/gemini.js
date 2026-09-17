@@ -489,10 +489,37 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
           throw new Error('上游响应截止时间已耗尽（含响应体读取），请增加 REQUEST_DEADLINE_MS 或减少重试次数');
         }
         var bodyRead = response.text();
+        // 超时取消后 text() 会 reject；预挂一个空 catch 避免未处理的 Promise 拒绝。
+        // After timeout-cancel, text() rejects; pre-attach a noop catch to
+        // avoid an unhandled promise rejection.
+        bodyRead.catch(function () {});
         var bodyTimer = null;
         var bodyTimeoutPromise = new Promise(function (_, reject) {
           bodyTimer = setTimeout(function () {
-            reject(new Error('上游响应体读取超时（' + bodyLeft + 'ms 内未完成），可尝试流式模式或调大 REQUEST_DEADLINE_MS'));
+            // 响应头已到达但正文停滞 —— 上游软封锁的典型特征（对无 Cookie
+            // 的数据中心出口 IP 静默限流）：连接正常、200 响应头正常，正文
+            // 永不到齐。调大 REQUEST_DEADLINE_MS 无济于事，需换出口身份
+            // （COOKIE_STRING）或出口 IP（ENABLE_PROXY / HTTPS_PROXY）。
+            // 主动取消悬挂的响应体，释放连接资源。
+            // Headers arrived but the body stalls — the signature of an
+            // upstream soft block against cookie-less datacenter egress:
+            // connection and 200 headers are fine, the body never completes.
+            // Raising REQUEST_DEADLINE_MS cannot help; change egress identity
+            // (COOKIE_STRING) or egress IP (ENABLE_PROXY / HTTPS_PROXY).
+            // Cancel the dangling body to release the connection.
+            // 注意：流被 text() 内部 reader 锁住时，cancel() 不抛同步异常，
+            // 而是返回已拒绝的 Promise —— Promise.resolve().catch() 同时
+            // 覆盖同步抛出与拒绝两种情况。
+            // Note: when the stream is locked by text()'s internal reader,
+            // cancel() returns a rejected promise instead of throwing;
+            // Promise.resolve().catch() covers both sync-throw and rejection.
+            try { if (response.body) Promise.resolve(response.body.cancel()).catch(function () {}); } catch (e) { /* 忽略 */ }
+            reject(new Error('上游已返回响应头，但响应体在 ' + bodyLeft + 'ms 内未完成（响应体读取超时）。' +
+              '这通常是上游对当前出口 IP 的静默限流（软封锁）：调大 REQUEST_DEADLINE_MS 无效，' +
+              '请设置 COOKIE_STRING，或启用 ENABLE_PROXY=true / HTTPS_PROXY 更换出口 IP。' +
+              'Headers arrived but the body never completed within ' + bodyLeft + 'ms — ' +
+              'likely a soft block on this egress IP: raising REQUEST_DEADLINE_MS will not help; ' +
+              'set COOKIE_STRING, or enable ENABLE_PROXY=true / HTTPS_PROXY to rotate egress.'));
           }, bodyLeft);
         });
         try {
