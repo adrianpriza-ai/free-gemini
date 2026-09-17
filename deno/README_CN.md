@@ -1,6 +1,6 @@
 # Gemini Web2API - Deno Deploy 部署指南
 
-[English](DENO-DEPLOY.md) | [Cloudflare 文档](../cloudflare/README_CN.md) | [Netlify 文档](../netlify/NETLIFY_CN.md) | [Vercel 文档](../vercel/VERCEL_CN.md)
+[English](README.md) | [Cloudflare 文档](../cloudflare/README_CN.md) | [Netlify 文档](../netlify/README_CN.md) | [Vercel 文档](../vercel/README_CN.md)
 
 在 [Deno Deploy](https://deno.com/deploy) 上运行 Gemini Web2API，获得真正的 SSE 流式输出，并支持原始 TCP Socket（代理池可用）—— 零配置、无需维护服务器。
 
@@ -174,6 +174,8 @@ deno run --allow-net --allow-env deno/deploy.js
    - 开启轮换代理池：`ENABLE_PROXY=true`（Deno 支持原始 TCP Socket），或设置静态 `HTTPS_PROXY`。
 2. **长生成超过截止时间。** 非流式请求输出很长时，耗时可能合理地超过 50 秒。调大 `REQUEST_DEADLINE_MS`（如 `90000`），或改用 `stream: true` 让内容增量到达。
 3. **路由 50 秒截止短于 55 秒重试预算。** 此问题已在代码中修复：重试循环现在会对齐路由截止时间，并抛出带提示的可读单次尝试超时错误，而不是笼统的 502。如果老部署仍显示笼统消息，请重新部署。
+
+> ℹ️ **看到的是 `HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率`？** 这才是**正确归属**的错误 —— 说明上游确实返回了 429（限流）。旧版本在 Gemini 的 `Retry-After` 等待超过剩余截止预算时，会把真实的 429 掩盖成笼统的超时。现在重试循环会立即抛出真实的 429，而不再白等。若 429 持续出现，请设置 `COOKIE_STRING` 或降低请求频率。
 
 快速自查：`GET /health` 的 `proxy.mode` 字段显示实际出站模式（`direct` / `outbound` / `pool`）—— 如果是 `direct` 且没有配置 Cookie，则命中原因 1。
 

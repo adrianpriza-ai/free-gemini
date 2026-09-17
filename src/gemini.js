@@ -331,12 +331,29 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
   // deadline and clients see the generic upstream_timeout instead of the real
   // upstream error (per-attempt timeout / rejection).
   // Inactive when config._requestStartMs is absent (direct/legacy callers).
+  // deadlineActive: 是否存在"必须遵守的响应截止时间"。平台截止
+  // （PRERESPONSE_DEADLINE_MS）或路由层总截止（REQUEST_DEADLINE_MS）任一生效
+  // 即为 true。循环内所有截止判断（停止重试/单次超时封顶/429 等待预算/
+  // 响应体读取竞速/退避封顶）都必须看这个标志，而不是只看平台截止 ——
+  // 否则在平台无截止（如 Cloudflare，值为 0）但设置了 REQUEST_DEADLINE_MS
+  // 的平台上，重试仍会越过路由截止，触发笼统的 upstream_timeout 502。
+  //
+  // deadlineActive: whether an enforceable response deadline exists — either
+  // the platform pre-response deadline or the router's REQUEST_DEADLINE_MS.
+  // Every in-loop deadline decision (stop-retry check, per-attempt timeout
+  // cap, 429 wait budget, body-read race, backoff cap) must consult this flag
+  // instead of only the platform deadline, otherwise platforms with no
+  // platform deadline (e.g. Cloudflare, 0) but a set REQUEST_DEADLINE_MS
+  // would still overrun the router deadline and surface the generic
+  // upstream_timeout 502.
+  var deadlineActive = PRERESPONSE_DEADLINE_MS > 0;
   var ROUTER_DEADLINE_MARGIN_MS = 3000;
   var routerDeadline = 0;
   if (config && config._requestStartMs > 0 && config.requestDeadlineMs > 0) {
     routerDeadline = config._requestStartMs + config.requestDeadlineMs - ROUTER_DEADLINE_MARGIN_MS;
     if (routerDeadline > 0 && (PRERESPONSE_DEADLINE_MS <= 0 || routerDeadline < deadline)) {
       deadline = routerDeadline;
+      deadlineActive = true;
     }
   }
 
@@ -360,7 +377,7 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
   for (var attempt = 0; attempt < config.retryAttempts; attempt++) {
     // ⏱️ 截止时间检查：剩余时间不足以完成一次有意义的请求时停止重试，
     // 避免总耗时越过 Netlify 的 40 秒响应头限制（导致 "Error - Request ID" 页面）
-    if (PRERESPONSE_DEADLINE_MS > 0) {
+    if (deadlineActive) {
       var remainingMs = deadline - Date.now();
       if (remainingMs < 3000) {
         log('非流式请求响应截止时间将耗尽，停止重试以保住响应头时限', 'WARN', config);
@@ -385,7 +402,7 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
       // 单次尝试超时不得超过剩余截止时间（最多再留 500ms 余量给头部处理）
       // Per-attempt timeout must not exceed the remaining pre-response deadline.
       var attemptTimeoutMs = config.requestTimeoutSec * 1000;
-      if (PRERESPONSE_DEADLINE_MS > 0) {
+      if (deadlineActive) {
         var remainingForAttempt = deadline - Date.now();
         attemptTimeoutMs = Math.max(1000, Math.min(attemptTimeoutMs, remainingForAttempt - 500));
       }
@@ -419,19 +436,29 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
       if (response.status === 429) {
         var retryAfter = parseInt(response.headers.get('Retry-After') || '5', 10);
         log('收到 429 限流，等待 ' + retryAfter + ' 秒后重试...', 'WARN', config);
-        if (attempt < config.retryAttempts - 1) {
-          // ⏱️ 等待时间封顶：不得超过响应截止时间的剩余量（启用截止时间的平台）
-          var waitMs = retryAfter * 1000;
-          if (PRERESPONSE_DEADLINE_MS > 0) {
-            waitMs = Math.min(waitMs, deadline - Date.now());
-            if (waitMs < 1000) {
-              throw new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
-            }
-          }
-          await new Promise(function (resolve) { setTimeout(resolve, waitMs); });
-          continue;  // 跳过本次，进入下一次重试
+        var tooManyRequests = new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
+        if (attempt >= config.retryAttempts - 1) {
+          throw tooManyRequests;  // 最后一次尝试：直接抛出真实的 429
         }
-        throw new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
+        // ⏱️ 429 等待预算：等待 Retry-After 之后必须仍留有 ≥3s 的有效尝试
+        // 时间，否则不要白等 —— 立即抛出真实的 429。旧逻辑把等待封顶到剩余
+        // 预算后照睡不误，睡完循环因预算耗尽而退出（lastError 为 undefined
+        // 或上一次的超时错误），真实的 429 被截止时间/超时错误掩盖，用户
+        // 只看到笼统的 upstream_timeout，无法定位真实原因。
+        //
+        // 429 wait budget: after honoring Retry-After there must be ≥3s left
+        // for a meaningful next attempt. Otherwise skip the sleep and throw
+        // the real 429 now. The old code slept until the budget was gone, the
+        // loop then exited via the deadline path, and the 429 was masked by
+        // the generic upstream_timeout error.
+        if (deadlineActive) {
+          var leftAfterWait = (deadline - Date.now()) - retryAfter * 1000;
+          if (leftAfterWait < 3000) {
+            throw tooManyRequests;
+          }
+        }
+        await new Promise(function (resolve) { setTimeout(resolve, retryAfter * 1000); });
+        continue;  // 跳过本次，进入下一次重试
       }
 
       // 403 Forbidden: 需要认证
@@ -456,7 +483,7 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
       // Body read is deadline-bound too: headers may arrive in time but the
       // body can stall — race the read against the deadline instead of
       // letting it consume the whole remaining budget.
-      if (PRERESPONSE_DEADLINE_MS > 0) {
+      if (deadlineActive) {
         var bodyLeft = deadline - Date.now();
         if (bodyLeft <= 0) {
           throw new Error('上游响应截止时间已耗尽（含响应体读取），请增加 REQUEST_DEADLINE_MS 或减少重试次数');
@@ -465,7 +492,7 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
         var bodyTimer = null;
         var bodyTimeoutPromise = new Promise(function (_, reject) {
           bodyTimer = setTimeout(function () {
-            reject(new Error('上游响应体读取超时（截止 ' + PRERESPONSE_DEADLINE_MS + 'ms 内未完成），可尝试流式模式或调大 REQUEST_DEADLINE_MS'));
+            reject(new Error('上游响应体读取超时（' + bodyLeft + 'ms 内未完成），可尝试流式模式或调大 REQUEST_DEADLINE_MS'));
           }, bodyLeft);
         });
         try {
@@ -499,7 +526,7 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
         // 指数退避: 延迟时间 = 基础延迟 * 2^attempt
         // ⏱️ 退避等待封顶：不得超过响应截止时间的剩余量（启用截止时间的平台）
         var delay = config.retryDelaySec * Math.pow(2, attempt) * 1000;
-        if (PRERESPONSE_DEADLINE_MS > 0) {
+        if (deadlineActive) {
           delay = Math.min(delay, deadline - Date.now());
           if (delay < 500) {
             // 剩余时间不足，直接放弃重试，把最后的错误抛给上层

@@ -250,8 +250,29 @@ export async function handleChatCompletions(request, body, config) {
           var response = null;
           var lastStreamError = null;
 
+          // ⏱️ 路由层总截止（REQUEST_DEADLINE_MS）：与非流式路径一致，流式
+          // 重试（含 429 Retry-After 等待与指数退避）同样必须在此前完成。
+          // 否则大 Retry-After / 长退避会吃光预算，真实的上游错误被笼统的
+          // upstream_timeout 502 掩盖。0 = 无约束（未启用截止）。
+          // Router-level deadline (REQUEST_DEADLINE_MS): streaming retries —
+          // including Retry-After waits and exponential backoff — must also
+          // finish before it, otherwise a large Retry-After/long backoff eats
+          // the budget and the real upstream error is masked by the generic
+          // upstream_timeout 502. 0 = unconstrained.
+          var STREAM_DEADLINE_MARGIN_MS = 3000;
+          var streamDeadline = 0;
+          if (config._requestStartMs > 0 && config.requestDeadlineMs > 0) {
+            streamDeadline = config._requestStartMs + config.requestDeadlineMs - STREAM_DEADLINE_MARGIN_MS;
+          }
+
           // 重试循环（与非流式路径保持一致）
           for (var streamAttempt = 0; streamAttempt < config.retryAttempts; streamAttempt++) {
+            // ⏱️ 剩余预算不足以完成一次有意义的尝试时停止重试
+            // Stop when the remaining budget cannot fit a meaningful attempt.
+            if (streamDeadline > 0 && streamDeadline - Date.now() < 3000) {
+              log('流式请求响应截止时间将耗尽，停止重试', 'WARN', config);
+              break;
+            }
             // 每次尝试重新构建请求头（不同指纹）
             var headers = await buildHeaders(config);
             if (streamAttempt > 0) {
@@ -263,10 +284,15 @@ export async function handleChatCompletions(request, body, config) {
             }
 
             // 创建独立的 AbortController 用于超时控制
+            // 单次尝试超时不得超过剩余截止预算（最多再留 1s 余量）
+            var fetchTimeoutMs = (config.requestTimeoutSec - 2) * 1000;
+            if (streamDeadline > 0) {
+              fetchTimeoutMs = Math.max(1000, Math.min(fetchTimeoutMs, streamDeadline - Date.now() - 1000));
+            }
             var fetchController = new AbortController();
             var fetchTimeout = setTimeout(function () {
               fetchController.abort();  // 超时后中止 fetch 请求
-            }, (config.requestTimeoutSec - 2) * 1000);
+            }, fetchTimeoutMs);
 
             try {
               // 发送 HTTP POST 请求到 Gemini（通过代理池或直连）
@@ -289,6 +315,15 @@ export async function handleChatCompletions(request, body, config) {
                 log('流式请求收到 429，等待 ' + retryAfter + ' 秒后重试...', 'WARN', config);
                 lastStreamError = new Error('HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率');
                 if (streamAttempt < config.retryAttempts - 1) {
+                  // ⏱️ 等待 Retry-After 后必须仍留 ≥3s 的有效尝试时间，否则
+                  // 直接跳出并抛出真实的 429 —— 白等会把预算耗光，真实的 429
+                  // 反而被笼统的 upstream_timeout 502 掩盖。
+                  // After honoring Retry-After there must be ≥3s left for a
+                  // meaningful attempt; otherwise bail out with the real 429
+                  // instead of letting the generic upstream_timeout mask it.
+                  if (streamDeadline > 0 && (streamDeadline - Date.now()) - retryAfter * 1000 < 3000) {
+                    break;
+                  }
                   await new Promise(function (resolve) { setTimeout(resolve, retryAfter * 1000); });
                   continue;
                 }
@@ -306,6 +341,10 @@ export async function handleChatCompletions(request, body, config) {
                 // 对于其他错误，也进行指数退避重试
                 if (streamAttempt < config.retryAttempts - 1) {
                   var errDelay = config.retryDelaySec * Math.pow(2, streamAttempt) * 1000;
+                  // ⏱️ 预算装不下这次退避时直接跳出，抛出真实的上游错误
+                  if (streamDeadline > 0 && (streamDeadline - Date.now()) - errDelay < 3000) {
+                    break;
+                  }
                   log('流式请求失败，重试 ' + (streamAttempt + 1) + '/' + config.retryAttempts, 'WARN', config);
                   await new Promise(function (resolve) { setTimeout(resolve, errDelay); });
                   continue;
@@ -323,6 +362,10 @@ export async function handleChatCompletions(request, body, config) {
               lastStreamError = fetchErr;
               if (streamAttempt < config.retryAttempts - 1) {
                 var fetchDelay = config.retryDelaySec * Math.pow(2, streamAttempt) * 1000;
+                // ⏱️ 预算装不下这次退避时直接跳出，抛出真实的异常
+                if (streamDeadline > 0 && (streamDeadline - Date.now()) - fetchDelay < 3000) {
+                  break;
+                }
                 log('流式请求异常，重试 ' + (streamAttempt + 1) + '/' + config.retryAttempts + ': ' + fetchErr.message, 'WARN', config);
                 await new Promise(function (resolve) { setTimeout(resolve, fetchDelay); });
               }
@@ -331,7 +374,7 @@ export async function handleChatCompletions(request, body, config) {
 
           // 所有重试失败，抛出最后的错误
           if (!response) {
-            throw lastStreamError || new Error('流式请求失败，所有重试已耗尽');
+            throw lastStreamError || new Error('流式请求失败，所有重试已耗尽（若接近 REQUEST_DEADLINE_MS 截止，可调大该值或减少重试次数）');
           }
 
           // -- 第四步：读取流式响应并实时转发增量数据

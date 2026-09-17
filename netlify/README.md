@@ -1,6 +1,6 @@
 # Gemini Web2API - Netlify Deployment Documentation
 
-[中文文档](NETLIFY_CN.md) | [Cloudflare Docs](../cloudflare/README.md)
+[中文文档](NETLIFY_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/README.md) | [Deno Docs](../deno/README.md)
 
 Run Gemini Web2API on Netlify Edge Functions for true SSE streaming, low latency worldwide, and no server to maintain.
 

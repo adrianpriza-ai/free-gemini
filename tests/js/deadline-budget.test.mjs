@@ -194,3 +194,119 @@ test('handleRequestSafe 502 deadline message carries actionable hints', async ()
     else process.env.ENABLE_PROXY = savedProxy;
   }
 });
+
+// =====================================================================
+// 429 attribution: a real upstream 429 must surface as "HTTP 429: ...
+// 请添加有效的 Cookie 或降低请求频率", never as the generic
+// upstream_timeout 502. Regression for the Retry-After wait eating the
+// deadline budget and masking the 429.
+// =====================================================================
+
+/**
+ * fetch() stub that answers every call with a 429 response.
+ * trackWaitMs records how long the retry loop actually slept, so tests can
+ * assert the loop did NOT burn the whole budget on a doomed Retry-After wait.
+ */
+function always429() {
+  var realNow = Date.now;
+  var waits = [];
+  globalThis.fetch = function () {
+    return Promise.resolve(new Response('rate limited', {
+      status: 429,
+      headers: { 'Retry-After': '120' }, // 120s — far beyond any budget
+    }));
+  };
+  Date.now = function () { return realNow() + (waits._advance || 0); };
+  return {
+    waits: waits,
+    /** Simulate the sleep: advance the virtual clock to the requested time. */
+    advanceTo: function (t) { waits._advance = t - realNow(); },
+    restore: function () { Date.now = realNow; },
+  };
+}
+
+// Patch global setTimeout inside always429 tests so sleeps resolve instantly
+// while recording their duration — keeps the suite fast and deterministic.
+function withInstantTimers(fn) {
+  var realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = function (cb, ms) {
+    return realSetTimeout(function () {
+      // Record sleep durations >= 1000ms (retry/Retry-After waits), ignore
+      // tiny timer artifacts (body-read race timers, abort timers).
+      if (typeof ms === 'number' && ms >= 1000) waits.push(ms);
+      cb();
+    }, 0);
+  };
+  try {
+    return fn();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+}
+
+test('upstream 429 with huge Retry-After surfaces the real 429 (non-streaming), not a timeout', async () => {
+  var handle = always429();
+  try {
+    await withInstantTimers(async function () {
+      // Default deadline (50s): Retry-After 120s can never fit — the loop
+      // must throw the real 429 on the first attempt instead of sleeping.
+      await assert.rejects(
+        geminiStreamGenerate('hi', 1, 4, makeConfig({ retryAttempts: 3 })),
+        function (err) {
+          assert.match(err.message, /HTTP 429: Too Many Requests/);
+          assert.doesNotMatch(err.message, /超时|abort/);
+          return true;
+        },
+      );
+    });
+    // The doomed 120s wait must never have been taken.
+    assert.ok(handle.waits.indexOf(120000) === -1, 'retry loop slept the full Retry-After: ' + JSON.stringify(handle.waits));
+  } finally {
+    handle.restore();
+    restoreFetch();
+  }
+});
+
+test('upstream 429 with a small Retry-After still retries within budget (non-streaming)', async () => {
+  var calls = 0;
+  globalThis.fetch = function () {
+    calls++;
+    if (calls < 3) return Promise.resolve(new Response('rate limited', { status: 429, headers: { 'Retry-After': '1' } }));
+    return Promise.resolve(new Response('46\n[[["wrb.fr",null,"123"]]]\n', { status: 200 }));
+  };
+  try {
+    await withInstantTimers(async function () {
+      var text = await geminiStreamGenerate('hi', 1, 4, makeConfig({ retryAttempts: 3, requestDeadlineMs: 50000 }));
+      assert.ok(typeof text === 'string');
+    });
+    assert.equal(calls, 3);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test('upstream 429 with huge Retry-After surfaces the real 429 (streaming path)', async () => {
+  var handle = always429();
+  try {
+    await withInstantTimers(async function () {
+      var config = makeConfig({ retryAttempts: 3 });
+      // Streaming path lives in handleChatCompletions(request, body, config).
+      var { handleChatCompletions } = await import('../../src/handlers.js');
+      var res = await handleChatCompletions(
+        new Request('http://localhost/v1/chat/completions'),
+        { model: 'gemini-3.6-flash', stream: true, messages: [{ role: 'user', content: 'hi' }] },
+        config,
+      );
+      assert.equal(res.status, 200); // SSE headers go out immediately; the error rides inside the stream
+      var sseBody = await res.text();
+      // The streamed SSE error chunk must carry the real 429 message.
+      assert.match(sseBody, /HTTP 429: Too Many Requests/);
+      assert.match(sseBody, /upstream_error/);
+      assert.doesNotMatch(sseBody, /upstream timeout|REQUEST_DEADLINE_MS/);
+    });
+    assert.ok(handle.waits.indexOf(120000) === -1, 'streaming loop slept the full Retry-After: ' + JSON.stringify(handle.waits));
+  } finally {
+    handle.restore();
+    restoreFetch();
+  }
+});

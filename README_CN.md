@@ -9,16 +9,16 @@
 将 Google Gemini 网页端转换为 OpenAI 兼容 API. 零成本, 跨平台, 单文件.
 
 > ☁️ **想要无服务器部署?** 可将同样的 API 免费部署到边缘计算平台，无需维护服务器：
-> - **Netlify**：一键部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](netlify/NETLIFY_CN.md)  
+> - **Netlify**：一键部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](netlify/README_CN.md)  
 >
 >   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
-> - **Vercel**：一键部署到 Vercel Edge Functions — 参见 [Vercel 部署指南](vercel/VERCEL_CN.md)  
+> - **Vercel**：一键部署到 Vercel Edge Functions — 参见 [Vercel 部署指南](vercel/README_CN.md)  
 >
 >   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Cloudflare**：部署到 Cloudflare Workers — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP_CN.md) 或 [完整部署文档](cloudflare/README_CN.md)
 >
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
-> - **Deno**：部署到 Deno Deploy — 参见 [Deno Deploy 部署指南](deno/DENO-DEPLOY_CN.md)
+> - **Deno**：部署到 Deno Deploy — 参见 [Deno Deploy 部署指南](deno/README_CN.md)
 >
 >   [![Deploy on Deno](https://deno.com/button)](https://console.deno.com/new?clone=https://github.com/adrianpriza-ai/free-gemini)
 

@@ -1,6 +1,6 @@
 # Gemini Web2API - Deno Deploy Documentation
 
-[中文文档](DENO-DEPLOY_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/NETLIFY.md) | [Vercel Docs](../vercel/VERCEL.md)
+[中文文档](README_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/README.md) | [Vercel Docs](../vercel/README.md)
 
 Run Gemini Web2API on [Deno Deploy](https://deno.com/deploy) for true SSE streaming with raw TCP socket support — zero config, no server to maintain.
 
@@ -174,6 +174,8 @@ The server gave up waiting for Gemini because no upstream response (headers) arr
    - Enable the rotating proxy pool: `ENABLE_PROXY=true` (Deno raw sockets are supported), or set a static `HTTPS_PROXY`.
 2. **Long generations exceed the deadline.** Non-streaming requests with big outputs can legitimately take >50s. Raise `REQUEST_DEADLINE_MS` (e.g. `90000`), or use `stream: true` so tokens arrive incrementally.
 3. **The 50s router deadline is shorter than the 55s retry budget.** This is already fixed in code: the retry loop now aligns to the router deadline and surfaces the real per-attempt error (e.g. a readable per-attempt timeout with hints) instead of the generic 502. If you still see the generic message on an old deployment, redeploy.
+
+> ℹ️ **Seeing `HTTP 429: Too Many Requests - 请添加有效的 Cookie 或降低请求频率` instead?** That is the *correct*, attributed error — Gemini is answering with 429 (rate limited), and older versions could mask it behind the generic timeout when Gemini's `Retry-After` wait exceeded the remaining deadline budget. The retry loop now surfaces the real 429 immediately instead of burning the budget on a doomed wait. If 429s are constant, set `COOKIE_STRING` or reduce request frequency.
 
 Quick check: `GET /health` reports the effective outbound mode under `proxy.mode` (`direct` / `outbound` / `pool`) — if it says `direct` and you have no cookies, cause #1 applies to you.
 

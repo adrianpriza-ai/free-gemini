@@ -1,6 +1,6 @@
 # Gemini Web2API - Netlify 部署指南
 
-[English](NETLIFY.md) | [Cloudflare 部署文档](../cloudflare/README_CN.md)
+[English](NETLIFY.md) | [Cloudflare 部署文档](../cloudflare/README_CN.md) | | [Vercel 文档](../vercel/README_CN.md) | [Deno 文档](../deno/README_CN.md)
 
 将 Gemini Web2API 部署到 Netlify Edge Functions：支持打字机式 SSE 流式输出，全球边缘节点低延迟，无需自己维护服务器。
 

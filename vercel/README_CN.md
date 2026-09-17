@@ -1,6 +1,6 @@
 # Gemini Web2API - Vercel 部署指南
 
-[English](VERCEL.md) | [Cloudflare 部署文档](../cloudflare/README_CN.md) | [Netlify 部署文档](../netlify/NETLIFY_CN.md)
+[English](README.md) | [Cloudflare 部署文档](../cloudflare/README_CN.md) | [Netlify 部署文档](../netlify/README_CN.md) | [Deno 文档](../deno/README_CN.md)
 
 将 Gemini Web2API 部署到 Vercel Edge Functions：在 Vercel 全球边缘节点上实现打字机式 SSE 流式输出——零配置，无需自己维护服务器。
 

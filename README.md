@@ -11,16 +11,16 @@
 Convert Google Gemini's web interface into an OpenAI-compatible API. Zero cost, cross-platform, single file.
 
 > ☁️ **Prefer serverless?** Deploy the same API for free with zero server maintenance:
-> - **Netlify**: Deploy to Netlify Edge Functions with 1-click — see [Netlify Deployment Docs](netlify/NETLIFY.md)  
+> - **Netlify**: Deploy to Netlify Edge Functions with 1-click — see [Netlify Deployment Docs](netlify/README.md)
 >
 >   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
-> - **Vercel**: Deploy to Vercel Edge Functions with 1-click — see [Vercel Deployment Docs](vercel/VERCEL.md)  
+> - **Vercel**: Deploy to Vercel Edge Functions with 1-click — see [Vercel Deployment Docs](vercel/README.md)
 >
 >   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Cloudflare**: Deploy to Cloudflare Workers — see [Cloudflare Quick Setup Guide](cloudflare/SETUP.md) or [Full Cloudflare Docs](cloudflare/README.md)
 >
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
-> - **Deno**: Deploy to Deno Deploy — see [Deno Deploy Deployment Docs](deno/DENO-DEPLOY.md)
+> - **Deno**: Deploy to Deno Deploy — see [Deno Deploy Deployment Docs](deno/README.md)
 >
 >   [![Deploy on Deno](https://deno.com/button)](https://console.deno.com/new?clone=https://github.com/adrianpriza-ai/free-gemini)
 

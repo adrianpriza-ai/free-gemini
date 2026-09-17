@@ -1,6 +1,6 @@
 # Gemini Web2API - Vercel Deployment Documentation
 
-[中文文档](VERCEL_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/NETLIFY.md)
+[中文文档](README_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/README.md) | [Deno Docs](../deno/README.md)
 
 Run Gemini Web2API on Vercel Edge Functions for true SSE streaming on Vercel's global edge network — zero config, no server to maintain.
 
