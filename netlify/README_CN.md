@@ -2,7 +2,7 @@
 
 [English](NETLIFY.md) | [Cloudflare 部署文档](../cloudflare/README_CN.md) | | [Vercel 文档](../vercel/README_CN.md) | [Deno 文档](../deno/README_CN.md)
 
-将 Gemini Web2API 部署到 Netlify Edge Functions：支持打字机式 SSE 流式输出，全球边缘节点低延迟，无需自己维护服务器。
+将 Gemini Web2API 部署到 Netlify Edge Functions：支持 SSE 流式输出，全球边缘节点低延迟，无需自己维护服务器。
 
 ---
 
@@ -12,7 +12,7 @@
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
 
-1. 点击上方的 **Deploy to Netlify** 按钮。
+1. 点击上方的 Deploy to Netlify 按钮。
 2. 连接您的 GitHub 账号并创建仓库。
 3. （可选）在 **Environment Variables** 中设置 `API_KEY` 或 `COOKIE_STRING`。
 4. 点击 **Deploy**，一分钟左右即可通过 `https://your-app-name.netlify.app` 访问。
@@ -29,7 +29,7 @@
    - **Base directory**：留空
    - **Build command**：留空
    - **Publish directory**：留空
-6. 点击 **Deploy site**。
+6. 点击 Deploy site。
 7. Netlify 会自动识别 `netlify.toml` 并激活 `/*` 边缘函数路由。
 
 ---
@@ -47,16 +47,23 @@
 | `GEMINI_BL` | String | Gemini Web 前端构建标签。 | 内置最新版 |
 | `RATE_LIMIT_MAX` | Number | 单 IP 窗口期内最大允许请求数。 | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | 限流时间窗口（秒）。 | `60` |
-| `ENABLE_PROXY` | String | 在支持原始 TCP Socket 的平台（如 Cloudflare Workers）启用轮换式**代理池**。**Netlify Edge 不支持**（无 TCP Socket API）——设置了也不生效，请求时会在日志中输出 `WARN` 告警。请改用下方的 `HTTPS_PROXY`。 | `false` |
-| `HTTPS_PROXY` | String | 静态出站代理地址（如 `http://user:pass@proxy:port`）。Netlify Edge 运行于 Deno，其 `fetch()` 会原生读取 `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`，直连请求会自动经代理隧道发出。`HTTP_PROXY` 与 `ALL_PROXY` 同样生效。 | 直连 |
+| `ENABLE_PROXY` | String | 在支持原始 TCP Socket 的平台（如 Cloudflare Workers）启用轮换式代理池。**Netlify Edge 不支持**（运行时仅暴露 Web 标准 API，无 `Deno.connect`）——设置了除日志中一条 `WARN` 告警外不生效，请求仍按下方模式正常发出。请改用 `HTTPS_PROXY`。 | `false` |
+| `HTTPS_PROXY` | String | 静态出站代理地址（如 `http://user:pass@proxy:port`）。Netlify Edge Functions 运行于 Deno，其 `fetch()` 会原生读取 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`——设置后所有上游请求自动经代理隧道发出，无需任何代码改动。`HTTP_PROXY`、`ALL_PROXY`（及小写变体）同样生效；可用 `NO_PROXY` 排除指定主机。 | 直连 |
 
-> 💡 **多 Cookie 轮换**：支持多个 Cookie 轮换，用竖线 `|` 分隔即可，例如：`cookie1| cookie2| cookie3`。
+> 多 Cookie 轮换：支持多个 Cookie 轮换，用竖线 `|` 分隔即可，例如：`cookie1| cookie2| cookie3`。
 
-> ⚠️ **Netlify 代理说明**：Netlify Edge Functions **不提供原始 TCP Socket**（`cloudflare:sockets`），因此轮换式**代理池**（`ENABLE_PROXY`/`PROXY_ENABLED`）**在 Netlify 上不受支持**，会被忽略并在日志中输出 `WARN` 告警。如需在 Netlify 走代理，请设置 **`HTTPS_PROXY`**（Deno 的 `fetch()` 会自动经其隧道转发）。`/health` 端点的 `proxy.mode` 会显示实际生效模式（`direct`、`outbound` 或 `pool`）。
+> Netlify 代理说明：Netlify Edge Functions 不提供原始 TCP Socket（`Deno.connect` / `cloudflare:sockets`），因此轮换式代理池（`ENABLE_PROXY`/`PROXY_ENABLED`）在 Netlify 上不受支持，会被忽略并在日志中输出 WARN 告警。如需在 Netlify 走代理，请设置 HTTPS_PROXY —— 这与 [Deno Deploy](../deno/README_CN.md) 部署获得的原生隧道能力相同，因为 Edge Functions 本身就运行在 Deno 上，开箱即用。
+>
+> 设置 `HTTPS_PROXY` 后请检查 `/health`：`proxy.mode` 应从 `direct` 变为 `outbound`，`proxy.enabled` 变为 `true`（代理地址的具体值不会对外报告）。如果仍显示 `direct`，常见原因有两个：
+>
+> 1. 作用域（Scope）：环境变量的作用域必须勾选 Functions（Netlify 控制台 → Site configuration → Environment variables → 变量的 scope 复选框），否则 Edge Functions 在运行时根本读不到它。
+> 2. 重新部署：环境变量在部署时注入 —— 新增或修改 `HTTPS_PROXY` 后需要触发一次重新部署。
+>
+> Node.js 运行时说明：以上仅适用于 **Edge Functions**（`netlify/edge-functions/`，Deno）。经典 **Netlify Functions** 运行时（`netlify/functions/`，Node.js）**不会**自动把 `fetch()` 经 `HTTPS_PROXY` 隧道转发 —— Node 18+ 需要自定义 dispatcher（如 `undici.ProxyAgent`）。本仓库的 Netlify 部署在 `/*` 路由使用的是 Edge Function，因此 `HTTPS_PROXY` 按上述方式生效。
 
 ---
 
-## 🔍 验证部署
+## 验证部署
 
 部署完成后，在浏览器访问或使用 curl 验证健康状态：
 
@@ -91,7 +98,7 @@ curl https://your-app-name.netlify.app/health
 }
 ```
 
-`proxy` 块反映实际出站模式：`direct`（默认）、`outbound`（静态 `HTTPS_PROXY` 生效中）或 `pool`（轮换代理池——仅 Cloudflare Workers 支持）。注意 Netlify Edge 上 `poolSupported` 恒为 `false`，因此仅设置 `ENABLE_PROXY=true` 无法把模式切换为 `pool`；如需代理请设置 `HTTPS_PROXY` 以获得 `"mode": "outbound"`。
+`proxy` 块反映实际出站模式：`direct`（默认）、`outbound`（静态 `HTTPS_PROXY` 生效中）或 `pool`（轮换代理池——仅 Cloudflare Workers 和 Deno Deploy 支持）。注意 Netlify Edge 上 `poolSupported` 恒为 `false`，因此仅设置 `ENABLE_PROXY=true` 无法把模式切换为 `pool`；如需代理请设置 `HTTPS_PROXY` 以获得 `"mode": "outbound"` —— 这是在 Netlify 上代理上游流量的受支持方式。
 
 ---
 

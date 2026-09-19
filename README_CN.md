@@ -6,35 +6,35 @@
 
 [English](README.md)
 
-将 Google Gemini 网页端转换为 OpenAI 兼容 API. 零成本, 跨平台, 单文件.
+将 Gemini 网页端转为 OpenAI 兼容 API. 免费、跨平台、单文件。
 
-> ☁️ **想要无服务器部署?** 可将同样的 API 免费部署到边缘计算平台，无需维护服务器：
-> - **Netlify**：一键部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](netlify/README_CN.md)  
->
+> 可将同样的 API 免费部署到边缘计算平台，无需维护服务器：
+> - **Netlify**：部署到 Netlify Edge Functions — 参见 [Netlify 部署指南](netlify/README_CN.md)  
+> 
 >   [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
-> - **Vercel**：一键部署到 Vercel Edge Functions — 参见 [Vercel 部署指南](vercel/README_CN.md)  
->
+> - **Vercel**：部署到 Vercel Edge Functions — 参见 [Vercel 部署指南](vercel/README_CN.md)  
+> 
 >   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Cloudflare**：部署到 Cloudflare Workers — 参见 [Cloudflare 快速部署指南](cloudflare/SETUP_CN.md) 或 [完整部署文档](cloudflare/README_CN.md)
->
+> 
 >   [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/adrianpriza-ai/free-gemini)
 > - **Deno**：部署到 Deno Deploy — 参见 [Deno Deploy 部署指南](deno/README_CN.md)
->
+> 
 >   [![Deploy on Deno](https://deno.com/button)](https://console.deno.com/new?clone=https://github.com/adrianpriza-ai/free-gemini)
 
 ## 特性
 
-- **可选密钥**: `api_keys` 为空时免密, 填入密钥后按 OpenAI Bearer Key 校验
-- **OpenAI 兼容**: 直接替换 `/v1/chat/completions` 和 `/v1/models`
-- **工具调用**: 完整的 Function Calling 支持 (OpenAI 格式)
-- **多模型**: Flash (3.6), 扩展思考 (2万字+输出), Pro, Auto, Lite
-- **思考深度**: 通过 `@think=N` 后缀调节 (0=最深, 4=最浅)
-- **联网搜索**: 内置互联网访问 (Gemini 原生搜索能力)
-- **跨平台**: 纯 Python, 仅一个可选依赖 (`httpx` 用于流式输出)
-- **流式输出**: 基于 `httpx` 的 SSE Streaming 支持
-- **Codex CLI**: Responses API (`/v1/responses`) 兼容 OpenAI Codex
-- **Gemini CLI**: Google 原生 API (`/v1beta/models`) 兼容 Gemini CLI
-- **Deno Deploy**: 一等适配器 (`deno/deploy.js`)，支持原始 TCP Socket（完整代理池）与 `HTTPS_PROXY` 原生隧道
+- 可选密钥: `api_keys` 为空时免密, 填入密钥后按 OpenAI Bearer Key 校验
+- OpenAI 兼容: 直接替换 `/v1/chat/completions` 和 `/v1/models`
+- 工具调用: 完整的 Function Calling 支持 (OpenAI 格式)
+- 多模型: Flash (3.6), 扩展思考 (2万字+输出), Pro, Auto, Lite
+- 思考深度: 通过 `@think=N` 后缀调节 (0=最深, 4=最浅)
+- 联网搜索: 内置互联网访问 (Gemini 原生搜索能力)
+- 跨平台: 纯 Python, 仅一个可选依赖 (`httpx` 用于流式输出)
+- 流式输出: 基于 `httpx` 的 SSE Streaming 支持
+- Codex CLI: Responses API (`/v1/responses`) 兼容 OpenAI Codex
+- Gemini CLI: Google 原生 API (`/v1beta/models`) 兼容 Gemini CLI
+- Deno Deploy: 一等适配器 (`deno/deploy.js`)，支持原始 TCP Socket（完整代理池）与 `HTTPS_PROXY` 原生隧道
 
 ## 快速开始
 
@@ -107,7 +107,7 @@ gemini
 | `gemini-3.7-flash` | 最新全能模型（Gemini 3.7 Flash） | ~12k 字符 |
 | `gemini-3.6-flash` | 全能模型 | ~12k 字符 |
 | `gemini-3.5-flash` | 3.6 Flash 的别名 | ~12k 字符 |
-| `gemini-3.5-flash-thinking` | 扩展思考, 最长输出 | **~2万字** |
+| `gemini-3.5-flash-thinking` | 扩展思考, 最长输出 | ~2万字 |
 | `gemini-3.5-flash-thinking-lite` | 自适应思考深度 | ~1.5万字 |
 | `gemini-3.1-pro` | 高级数学与代码 (需 cookie) | ~1.2万字 |
 | `gemini-auto` | 自动选择模型 | 不定 |
@@ -125,7 +125,7 @@ gemini-3.5-flash-thinking@think=4   # 最浅
 
 ## 可选: Cookie 配置 (Pro 模型)
 
-匿名访问对所有模型有效, 但 `gemini-3.1-pro` 在无认证时会路由到 Flash. 要获得真正的 Pro 路由, 需要 **Gemini Advanced (付费订阅)** 账号的 cookie:
+匿名访问对所有模型有效, 但 `gemini-3.1-pro` 在无认证时会路由到 Flash. 要获得真正的 Pro 路由, 需要 Gemini Advanced (付费订阅) 账号的 cookie:
 
 ```bash
 python gemini_web2api.py --cookie-file cookie.txt
@@ -147,7 +147,7 @@ SID=你的SID值; HSID=你的HSID值; SSID=你的SSID值; APISID=你的APISID值
 {"cookie": "SID=xxx; HSID=xxx; SSID=xxx; APISID=xxx; SAPISID=xxx; __Secure-1PSID=xxx", "sapisid": "你的SAPISID值"}
 ```
 
-**替代方案 (浏览器扩展)**: 使用任意 "Export Cookies" 扩展导出 `gemini.google.com` 的 cookie, 然后转换为上述单行格式.
+替代方案 (浏览器扩展): 使用任意 "Export Cookies" 扩展导出 `gemini.google.com` 的 cookie, 然后转换为上述单行格式.
 
 ### 登录账号路径与 XSRF Token
 
@@ -172,7 +172,7 @@ https://gemini.google.com/u/1/app/...
 
 如果登录态请求返回 HTTP 400 且错误中包含 `xsrf`, 请刷新 Gemini Web 后更新 `xsrf_token`, 并确认 `auth_user` 与浏览器 URL 中的 `/u/<序号>/` 一致.
 
-Pro 路由需要 **Gemini Advanced** (付费订阅). 免费 Google 账号的 cookie 可以登录认证, 但会静默回退到 Flash.
+Pro 路由需要 Gemini Advanced (付费订阅). 免费 Google 账号的 cookie 可以登录认证, 但会静默回退到 Flash.
 
 ## 配置文件
 
@@ -224,13 +224,13 @@ docker run -d --name gemini-web2api -p 8081:8081 -v ./config.json:/app/config.js
 
 此时 `config.json` 中设置 `"cookie_file": "/app/cookie.txt"`.
 
-> **注意**: 如果 Docker 默认 bridge 网络下出现空回复 (`content: null`), 请切换到 host 网络: `docker run --network host ...` 或在 compose 文件中添加 `network_mode: host`. 这是 Gemini 上游拒绝来自 Docker NAT IP 段的请求导致的.
+> 注意: 如果 Docker 默认 bridge 网络下出现空回复 (`content: null`), 请切换到 host 网络: `docker run --network host ...` 或在 compose 文件中添加 `network_mode: host`. 这是 Gemini 上游拒绝来自 Docker NAT IP 段的请求导致的.
 
 ## 代理配置
 
 如果无法直接访问 `gemini.google.com` (连接超时), 需要配置代理:
 
-**方式 1: 命令行参数**
+方式 1: 命令行参数
 ```bash
 python gemini_web2api.py --proxy http://127.0.0.1:7890
 ```
@@ -285,10 +285,10 @@ resp = client.chat.completions.create(
 
 ## 已知限制
 
-- **图片上传可能需要 Cookie**: 多模态输入使用 Gemini 网页端图片上传接口。匿名上传失败时, 请配置 Gemini cookie。
-- **Pro/Ultra 非真实路由**: 无付费订阅 cookie 时, `gemini-3.1-pro` 实际路由到 Flash 模型. "Pro" 只是 UI 偏好标签.
-- **单轮对话**: 每次请求是独立对话, 多轮上下文通过在 prompt 中包含历史消息模拟.
-- **频率限制**: Google 可能限制高频请求, server 会自动重试但持续高负载可能被封.
+- 图片上传可能需要 Cookie，因为多模态输入使用 Gemini 网页端图片上传接口。匿名上传失败时，请配置 Gemini cookie。
+- Pro/Ultra 非真实路由：无付费订阅 cookie 时，`gemini-3.1-pro` 实际路由到 Flash 模型，"Pro" 只是 UI 偏好标签。
+- 单轮对话：每次请求是独立对话，多轮上下文通过在 prompt 中包含历史消息模拟。
+- 频率限制：Google 可能限制高频请求，server 会自动重试，但持续高负载可能被封。
 
 ## 系统要求
 

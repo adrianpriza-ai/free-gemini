@@ -2,15 +2,15 @@
 
 [中文文档](README_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/README.md) | [Vercel Docs](../vercel/README.md)
 
-Run Gemini Web2API on [Deno Deploy](https://deno.com/deploy) for true SSE streaming with raw TCP socket support — zero config, no server to maintain.
+Run Gemini Web2API on [Deno Deploy](https://deno.com/deploy) for SSE streaming with raw TCP socket support — zero config, no server to maintain.
 
-> 📁 The entrypoint lives at [`deno/deploy.js`](../deno/deploy.js), a thin Deno adapter over the shared core in [`src/`](../src/) (the same core used by the Cloudflare, Netlify and Vercel adapters). It starts an HTTP server with `Deno.serve()` — the API required by the current Deno Deploy platform (Deploy Classic, which accepted legacy `serve()`, was shut down on 2026-07-20). [`deno/sockets.js`](../deno/sockets.js) wraps `Deno.connect` into the socket shape the proxy pool expects, so the rotating proxy pool works on Deno too.
+> The entrypoint is at [`deno/deploy.js`](../deno/deploy.js), a thin Deno adapter over the shared core in [`src/`](../src/) (the same core used by the Cloudflare, Netlify and Vercel adapters). It starts an HTTP server with `Deno.serve()` — the API required by the current Deno Deploy platform (Deploy Classic, which accepted legacy `serve()`, was shut down on 2026-07-20). [`deno/sockets.js`](../deno/sockets.js) wraps `Deno.connect` into the socket shape the proxy pool expects, so the rotating proxy pool works on Deno too.
 
-> 💡 **Why Deno Deploy is a good fit**: like Cloudflare Workers (but unlike Netlify/Vercel Edge), Deno exposes raw TCP sockets (`Deno.connect`), so the full rotating proxy pool is available. And like Netlify Edge (but unlike Vercel), Deno's `fetch()` natively tunnels through `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` for static outbound proxies.
+> Deno Deploy is a good fit because, like Cloudflare Workers (but unlike Netlify/Vercel Edge), Deno exposes raw TCP sockets (`Deno.connect`), so the full rotating proxy pool is available. And like Netlify Edge (but unlike Vercel), Deno's `fetch()` natively tunnels through `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` for static outbound proxies.
 
 ---
 
-## ⚡ Quick Deploy
+## Quick Deploy
 
 ### Option 1: GitHub integration (recommended)
 
@@ -51,7 +51,7 @@ deno deploy env add API_KEY "sk-your-key" --secret
 
 ---
 
-## ⚙️ Environment Variables (Optional)
+## Environment Variables (Optional)
 
 Configure these in Deno Deploy: **app settings → Add/Edit environment variables** (or `deno deploy env add`).
 
@@ -68,13 +68,13 @@ Configure these in Deno Deploy: **app settings → Add/Edit environment variable
 | `ENABLE_PROXY` | String | Enables the rotating **proxy pool** (`Deno.connect` raw sockets are available on Deno). | `false` |
 | `HTTPS_PROXY` | String | Static outbound proxy URL (e.g. `http://user:pass@proxy:port`). Deno's `fetch()` reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` natively, so direct requests are tunneled automatically. `HTTP_PROXY` and `ALL_PROXY` are also honored. | none (direct) |
 
-> ⚠️ **TLS proxying note (Deno Deploy)**: Deno Deploy prohibits plain `Deno.connect` to **port 443** (TLS termination is required on 443; see Deno's "Pricing and limitations" page). The proxy pool only ever connects to *proxy servers* — typically on ports 80/1080/3128/8080 — so normal HTTP/SOCKS proxies are unaffected. Plain SOCKS/HTTP proxies on 443 would fail on Deploy but work under local `deno run`. The `/health` endpoint reports the effective mode under `proxy.mode` (`direct`, `outbound`, or `pool`).
+> TLS proxying note (Deno Deploy): Deno Deploy prohibits plain `Deno.connect` to port 443 (TLS termination is required on 443; see Deno's "Pricing and limitations" page). The proxy pool only ever connects to *proxy servers* — typically on ports 80/1080/3128/8080 — so normal HTTP/SOCKS proxies are unaffected. Plain SOCKS/HTTP proxies on 443 would fail on Deploy but work under local `deno run`. The `/health` endpoint reports the effective mode under `proxy.mode` (`direct`, `outbound`, or `pool`).
 
-> 💡 **Tip for Multiple Cookies**: You can rotate between multiple Google accounts by separating cookies with a pipe character (`|`), e.g. `cookie_account_1| cookie_account_2`.
+> Tip for Multiple Cookies: You can rotate between multiple Google accounts by separating cookies with a pipe character (`|`), e.g. `cookie_account_1| cookie_account_2`.
 
 ---
 
-## 🔍 Verification
+## Verification
 
 Once deployed, check your health endpoint in your browser or with curl:
 
@@ -113,7 +113,7 @@ Expected response:
 
 ---
 
-## 💻 Client Configuration
+## Client Configuration
 
 ### NextChat / ChatGPT-Next-Web
 
@@ -148,7 +148,7 @@ curl https://your-app-name.deno.net/v1/chat/completions \
 
 ---
 
-## 🛠️ Local Development
+## Local Development
 
 Run the exact same adapter locally with the Deno CLI (no account needed):
 
@@ -159,11 +159,11 @@ deno run --allow-net --allow-env deno/deploy.js
 
 The server starts at `http://localhost:8000` (`Deno.serve`'s default port; set the `DENO_PORT` environment variable, e.g. `DENO_PORT=8081 deno run ...`, to change it).
 
-> ⚠️ **Always pass `--allow-env`**: the adapter reads config from environment variables at request time. Running with only `--allow-net` makes the first request block on Deno's interactive permission prompt — in a background/pipe context that prompt is invisible and every request appears to hang forever. The entry now self-checks permissions at startup and exits with a clear message instead.
+> Always pass `--allow-env`: the adapter reads config from environment variables at request time. Running with only `--allow-net` makes the first request block on Deno's interactive permission prompt — in a background/pipe context that prompt is invisible and every request appears to hang forever. The entry now self-checks permissions at startup and exits with a clear message instead.
 
 ---
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### `upstream timeout: no response within 50000ms (REQUEST_DEADLINE_MS)` (502)
 

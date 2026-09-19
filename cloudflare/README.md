@@ -1,24 +1,24 @@
 # Gemini Web2API - Cloudflare Workers Deployment Documentation
 
-[中文文档](README_CN.md) | ⚡ **[Quick Setup Guide](SETUP.md)** (~5 min, zero to deployed)
+[中文文档](README_CN.md) | [Quick Setup Guide](SETUP.md) (~5 min, zero to deployed)
 
-> 🚀 **New here?** Follow the [Quick Setup Guide](SETUP.md) — cookie, KV, secrets, deploy, verify, first request.
+> New here? Follow the [Quick Setup Guide](SETUP.md) — cookie, KV, secrets, deploy, verify, first request.
 
-## 📖 Project Introduction
+## Project Introduction
 
-Gemini Web2API runs on Cloudflare Workers and turns the Gemini web interface into an OpenAI-compatible API. No server, no required API key, works out of the box.
+Gemini Web2API runs on Cloudflare Workers and converts the Gemini web interface to an OpenAI-compatible API. No server or API key is required.
 
 ### Core Features
 
 - **Zero-cost deployment**: Based on Cloudflare Workers free plan (100,000 requests per day)
-- **Global acceleration**: Automatically deployed to Cloudflare's 300+ global edge nodes
-- **OpenAI compatible**: Fully compatible with `/v1/chat/completions` and `/v1/models` endpoints
-- **Typewriter streaming output**: True SSE (Server-Sent Events) streaming response
+- Global acceleration: Deployed to Cloudflare's 300+ global edge nodes
+- OpenAI compatible: Compatible with `/v1/chat/completions` and `/v1/models` endpoints
+- Streaming output: SSE (Server-Sent Events) streaming response
 - **Multi-fingerprint rotation**: 8 browser fingerprints + 6 language preferences randomly rotated to reduce detection probability
 - **Multi-Cookie rotation**: Supports configuring multiple Google account cookies, randomly selected for use
 - **Concurrent safety**: Request-level configuration isolation, completely eliminating configuration crosstalk in high-concurrency scenarios
 - **Tool call support**: Compatible with OpenAI Function Calling format
-- **ProxyScrape Auto Proxy Rotation**: Automatically fetches free proxies from ProxyScrape (timeout <= 200ms API or GitHub raw), auto-tests connectivity against `gemini.google.com:443`, supports HTTP/SOCKS4/SOCKS5 via `cloudflare:sockets`. Uses **best-of-2 scoring** so the fastest verified proxy wins most requests while slower ones still get periodic health checks. The pool updates every 24 hours (Cron Trigger + background refresh), candidate lists are cached in memory to avoid redundant upstream fetches, and everything falls back to a direct connection on failure.
+- ProxyScrape Auto Proxy Rotation: Automatically fetches free proxies from ProxyScrape (timeout <= 200ms API or GitHub raw), auto-tests connectivity against `gemini.google.com:443`, supports HTTP/SOCKS4/SOCKS5 via `cloudflare:sockets`. Uses best-of-2 scoring so the fastest verified proxy wins most requests while slower ones still get periodic health checks. The pool updates every 24 hours (Cron Trigger + background refresh), candidate lists are cached in memory to avoid redundant upstream fetches, and everything falls back to a direct connection on failure.
 
 ### Applicable Scenarios
 
@@ -186,16 +186,16 @@ Configure in Cloudflare Dashboard → Workers → Your Worker → Settings → V
 
 #### Proxy Rotation Modes
 
-Set `PROXY_ROTATION_MODE` to one of four values to control how the next proxy is chosen for each request. All modes share the same **adaptive scoring layer**: every successful request updates the proxy's latency with an EWMA (α = 0.3) and resets its fail counter, so a proxy that just slowed down drops in rank within ~3 requests, and a recovered one climbs back. Every failed request increments `fails`, which halves that proxy's score (exponential cooldown), and any proxy that hits 2 cumulative fails is evicted from the pool.
+Set `PROXY_ROTATION_MODE` to one of four values to control how the next proxy is chosen for each request. All modes share the same adaptive scoring layer: every successful request updates the proxy's latency with an EWMA (α = 0.3) and resets its fail counter, so a proxy that just slowed down drops in rank within ~3 requests, and a recovered one climbs back. Every failed request increments `fails`, which halves that proxy's score (exponential cooldown), and any proxy that hits 2 cumulative fails is evicted from the pool.
 
 | Mode | Selection rule | Cost | Best for |
 |-|-|-|-|
-| `best-of-2` *(default)* | Pick 2 distinct proxies at random, return the one with the higher score | O(1) | **Production** — near-optimal load balancing, naturally avoids the heavy-weight concentration of pure roulette |
+| `best-of-2` *(default)* | Pick 2 distinct proxies at random, return the one with the higher score | O(1) | Production — near-optimal load balancing, naturally avoids the heavy-weight concentration of pure roulette |
 | `round-robin` | Strict sequential walk through the pool, wrap around at the end | O(1) | Want perfect fairness, no quality signal |
 | `random` | Pure uniform random, ignores latency and fails | O(1) | Debugging / baseline comparison |
 | `weighted` | Inverse-latency roulette with a 10% exploration floor so the slowest proxy still gets probed | O(n) | Compatible with the legacy "Smart Round Robin" — use if you need explicit probability distribution over all proxies |
 
-**Score formula** (used by `best-of-2` and `weighted`):
+Score formula (used by `best-of-2` and `weighted`):
 
 ```
 score = reliability / (latency + 1)
@@ -206,7 +206,7 @@ reliability = 1           if fails == 0
 - Latency defaults to 1000 ms if missing or non-positive, so the `latency=0` path (pretest disabled) no longer collapses to `1/0 = Infinity`.
 - `fails` resets to 0 on the first successful request, so a proxy recovers fully after one good call.
 
-**Examples:**
+Examples:
 
 ```bash
 # Default — power-of-two choices
@@ -225,22 +225,22 @@ PROXY_ROTATION_MODE=weighted
 Invalid values are ignored and logged as a `WARN`; the worker keeps the default (`best-of-2`).
 
 #### How the 24-Hour Update Works:
-1. **Cloudflare Cron Trigger (Recommended)**:
+1. Cloudflare Cron Trigger (Recommended):
    - When deploying via Wrangler, `wrangler.jsonc` already configures `"triggers": { "crons": ["0 0 * * *"] }`.
    - In Cloudflare Dashboard: Go to **Workers & Pages** → Your Worker → **Triggers** → **Cron Triggers** → **Add Cron Trigger** → enter `0 0 * * *` (every 24 hours at 00:00 UTC).
-2. **On-Demand Auto-Update**:
+2. On-Demand Auto-Update:
    - Even if you don't configure a Cron Trigger, the Worker automatically checks the timestamp on incoming requests. If 24 hours have passed since the last update, it refreshes the proxy pool in the background using `ctx.waitUntil()` without slowing down user requests!
-3. **Cloudflare KV Persistence (Recommended with Cron)**:
+3. Cloudflare KV Persistence (Recommended with Cron):
    - Bind a KV namespace named `PROXY_KV` to your Worker. Verified proxies will be cached in KV across all edge data center instances!
-   - **This is what makes the Cron Trigger effective**: the daily cron refresh runs in its own invocation with its own subrequest budget, tests the pool, and writes the verified result to KV — so user requests on any isolate load the warm pool from KV instead of paying the cold-start test cost.
+   - This is what makes the Cron Trigger effective: the daily cron refresh runs in its own invocation with its own subrequest budget, tests the pool, and writes the verified result to KV — so user requests on any isolate load the warm pool from KV instead of paying the cold-start test cost.
    - Setup: `npx wrangler kv namespace create PROXY_KV`, then paste the returned namespace `id` into the `kv_namespaces` block of `wrangler.jsonc` (a placeholder is already there).
    - Without KV, the cron refresh only warms the cron's own throwaway isolate; each user-facing isolate still does its own cold-start refresh.
-4. **Proxy Endpoints** (all require a valid API key, same auth as `/v1` endpoints):
+4. Proxy Endpoints (all require a valid API key, same auth as `/v1` endpoints):
     - `GET /proxies`: View proxy pool status, active proxy count, latencies, and last/next update times.
     - `POST /proxies/refresh` or `GET /proxies/refresh`: Force an immediate re-fetch and test of the proxy pool.
     - `GET /debug/proxies`: Detailed pool diagnostics — per-proxy health (`healthy`/`flaky`), latency, fail counts, rotation scores (highest first), and internal state (candidate cache, refresh due, rotation mode).
     - `GET /health`: Includes live proxy status in the health check JSON.
-5. **In-Memory Candidate Caching (Free)**:
+5. In-Memory Candidate Caching (Free):
    - After fetching from the primary/fallback source, the parsed candidate list is cached **per Worker Isolate** (free, no KV cost).
    - TTL equals `PROXY_UPDATE_INTERVAL_HOURS` (24h default). Within one cycle, refresh attempts reuse the cache and skip both the ProxyScrape and GitHub raw fetches.
    - Manual `/proxies/refresh` calls bypass the cache (`force=true`) and always re-fetch.
@@ -259,7 +259,7 @@ Anonymous requests hit Gemini's rate limits quickly (HTTP 429). A valid cookie l
 
 1. Open Chrome/Edge browser
 2. Visit https://gemini.google.com/app and log in to your Google account
-3. Press **F12** to open developer tools
+3. Press F12 to open developer tools
 4. Go to the **Application** tab
 5. On the left, select **Cookies** → `https://gemini.google.com`
 6. Find the following Cookies and copy their values:
@@ -325,28 +325,28 @@ This program has a built-in browser fingerprint rotation system, where each requ
 
 ### Q: Returns `empty response from server`
 
-**Cause**: NextChat streaming parsing issue.  
-**Solution**: Make sure you're using the latest version of the code (SSE format has been fixed).
+Cause: NextChat streaming parsing issue.  
+Solution: Make sure you're using the latest version of the code (SSE format has been fixed).
 
 ### Q: Returns `HTTP 429: Too Many Requests`
 
-**Cause**: Gemini rate limiting, anonymous request frequency limits are stricter.  
-**Solution**: Configure valid `COOKIE_STRING` and `SAPISID`.
+Cause: Gemini rate limiting, anonymous request frequency limits are stricter.  
+Solution: Configure valid `COOKIE_STRING` and `SAPISID`.
 
 ### Q: Returns `HTTP 405: Method Not Allowed`
 
-**Cause**: BL version expired.  
-**Solution**: Update `geminiBl` configuration (see the "Updating BL Version" section above).
+Cause: BL version expired.  
+Solution: Update `geminiBl` configuration (see the "Updating BL Version" section above).
 
 ### Q: Returns `invalid api key`
 
-**Cause**: Client API Key configuration error.  
-**Solution**: Check if the client is configured with the correct API Key (default `sk-gemini`).
+Cause: Client API Key configuration error.  
+Solution: Check if the client is configured with the correct API Key (default `sk-gemini`).
 
 ### Q: WorkBuddy usage shows crosstalk
 
-**Cause**: Multi-model concurrent requests share global configuration.  
-**Solution**: Current version has resolved this issue through request-level configuration isolation.
+Cause: Multi-model concurrent requests share global configuration.  
+Solution: Current version has resolved this issue through request-level configuration isolation.
 
 ---
 

@@ -2,20 +2,20 @@
 
 [English](README.md) | [Cloudflare 文档](../cloudflare/README_CN.md) | [Netlify 文档](../netlify/README_CN.md) | [Vercel 文档](../vercel/README_CN.md)
 
-在 [Deno Deploy](https://deno.com/deploy) 上运行 Gemini Web2API，获得真正的 SSE 流式输出，并支持原始 TCP Socket（代理池可用）—— 零配置、无需维护服务器。
+在 [Deno Deploy](https://deno.com/deploy) 上运行 Gemini Web2API，获得 SSE 流式输出，并支持原始 TCP Socket（代理池可用）—— 零配置、无需维护服务器。
 
-> 📁 入口文件位于 [`deno/deploy.js`](../deno/deploy.js)，是加载 [`src/`](../src/) 共享核心的薄适配器（与 Cloudflare、Netlify、Vercel 适配器共用同一核心）。入口使用 `Deno.serve()` 启动 HTTP 服务 —— 这是当前 Deno Deploy 平台要求的 API（旧版 Deploy Classic 已于 2026-07-20 停服，其支持的 std `serve()` 不再可用）。[`deno/sockets.js`](../deno/sockets.js) 把 `Deno.connect` 包装成代理池期望的 socket 形态，因此轮换式代理池在 Deno 上也能完整工作。
+> 入口文件位于 [`deno/deploy.js`](../deno/deploy.js)，是加载 [`src/`](../src/) 共享核心的薄适配器（与 Cloudflare、Netlify、Vercel 适配器共用同一核心）。入口使用 `Deno.serve()` 启动 HTTP 服务 —— 这是当前 Deno Deploy 平台要求的 API（旧版 Deploy Classic 已于 2026-07-20 停服，其支持的 std `serve()` 不再可用）。[`deno/sockets.js`](../deno/sockets.js) 把 `Deno.connect` 包装成代理池期望的 socket 形态，因此轮换式代理池在 Deno 上也能完整工作。
 
-> 💡 **为什么 Deno Deploy 是个好选择**：与 Cloudflare Workers 一样（Netlify/Vercel Edge 则不行），Deno 提供原始 TCP Socket（`Deno.connect`），完整的轮换式代理池可用；与 Netlify Edge 一样（Vercel 则不行），Deno 的 `fetch()` 原生读取 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`，静态出站代理自动隧道生效。
+> 为什么 Deno Deploy 是个好选择：与 Cloudflare Workers 一样（Netlify/Vercel Edge 则不行），Deno 提供原始 TCP Socket（`Deno.connect`），完整的轮换式代理池可用；与 Netlify Edge 一样（Vercel 则不行），Deno 的 `fetch()` 原生读取 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`，静态出站代理自动隧道生效。
 
 ---
 
-## ⚡ 快速部署
+## 快速部署
 
 ### 方式 1：GitHub 集成（推荐）
 
 1. Fork 或推送本仓库到你的 GitHub 账号。
-2. 登录 [console.deno.com](https://console.deno.com) 并创建**组织**（新版 Deno Deploy 的账号体系与已停服的 Deploy Classic 相互独立）。
+2. 登录 [console.deno.com](https://console.deno.com) 并创建组织（新版 Deno Deploy 的账号体系与已停服的 Deploy Classic 相互独立）。
 3. 点击 **+ New App**，选择你的 GitHub 仓库，按提示授权 Deno Deploy GitHub App。
 4. 在 **Edit build config** 中配置：
    - **Framework preset**: `No Preset`
@@ -51,7 +51,7 @@ deno deploy env add API_KEY "sk-your-key" --secret
 
 ---
 
-## ⚙️ 环境变量（可选）
+## 环境变量（可选）
 
 在 Deno Deploy 的 **app settings → Add/Edit environment variables** 中配置（或用 `deno deploy env add`）。
 
@@ -65,16 +65,16 @@ deno deploy env add API_KEY "sk-your-key" --secret
 | `RATE_LIMIT_MAX` | Number | 时间窗口内单 IP 最大请求数。 | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | 速率限制窗口（秒）。 | `60` |
 | `REQUEST_DEADLINE_MS` | Number | 服务端单请求总截止时间（毫秒）：上游响应未按时就位时立即返回结构化 502（`upstream_timeout`），而不是挂起。部署在 Deno Deploy 时建议低于平台 55s 响应头限制。`0` 禁用 | `50000` |
-| `ENABLE_PROXY` | String | 启用轮换式**代理池**（Deno 提供原始 TCP Socket，可用）。 | `false` |
+| `ENABLE_PROXY` | String | 启用轮换式代理池（Deno 提供原始 TCP Socket，可用）。 | `false` |
 | `HTTPS_PROXY` | String | 静态出站代理地址（如 `http://user:pass@proxy:port`）。Deno 的 `fetch()` 原生读取 `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`，直连请求自动经代理隧道发出；`HTTP_PROXY` 与 `ALL_PROXY` 同样生效。 | 直连 |
 
-> ⚠️ **TLS 代理限制（Deno Deploy）**：Deno Deploy 禁止用 `Deno.connect` 直连 **443 端口**（443 必须做 TLS 终结，详见 Deno "Pricing and limitations" 文档）。代理池只连接*代理服务器*——通常在 80/1080/3128/8080 端口——因此常规 HTTP/SOCKS 代理不受影响。监听在 443 的明文 SOCKS/HTTP 代理在 Deploy 上会失败，但在本地 `deno run` 下可用。`/health` 端点的 `proxy.mode` 会显示实际生效模式（`direct`、`outbound` 或 `pool`）。
+> TLS 代理限制（Deno Deploy）：Deno Deploy 禁止用 `Deno.connect` 直连 **443 端口**（443 必须做 TLS 终结，详见 Deno "Pricing and limitations" 文档）。代理池只连接*代理服务器*——通常在 80/1080/3128/8080 端口——因此常规 HTTP/SOCKS 代理不受影响。监听在 443 的明文 SOCKS/HTTP 代理在 Deploy 上会失败，但在本地 `deno run` 下可用。`/health` 端点的 `proxy.mode` 会显示实际生效模式（`direct`、`outbound` 或 `pool`）。
 
-> 💡 **多 Cookie 轮换提示**：用竖线分隔多个账号 Cookie 即可轮换，如 `cookie_account_1| cookie_account_2`。
+> 多 Cookie 轮换提示：用竖线分隔多个账号 Cookie 即可轮换，如 `cookie_account_1| cookie_account_2`。
 
 ---
 
-## 🔍 验证
+## 验证
 
 部署完成后，用浏览器或 curl 访问健康检查端点：
 
@@ -113,7 +113,7 @@ Deno 上 `poolSupported` 为 `true`（提供原始 TCP Socket），设置 `ENABL
 
 ---
 
-## 💻 客户端配置
+## 客户端配置
 
 ### NextChat / ChatGPT-Next-Web
 

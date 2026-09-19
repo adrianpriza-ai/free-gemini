@@ -2,11 +2,11 @@
 
 [English](README.md) | [Cloudflare 部署文档](../cloudflare/README_CN.md) | [Netlify 部署文档](../netlify/README_CN.md) | [Deno 文档](../deno/README_CN.md)
 
-将 Gemini Web2API 部署到 Vercel Edge Functions：在 Vercel 全球边缘节点上实现打字机式 SSE 流式输出——零配置，无需自己维护服务器。
+将 Gemini Web2API 部署到 Vercel Edge Functions：在 Vercel 全球边缘节点上实现 SSE 流式输出——零配置，无需自己维护服务器。
 
 > 📁 端点位于 [`api/gemini.js`](../api/gemini.js)，是共享核心 [`src/`](../src/) 之上的 Vercel 薄适配器（Cloudflare Worker 与 Netlify Functions 也复用同一核心）。[`vercel.json`](../vercel.json) 通过重写规则将所有路径（如 `/v1/chat/completions`、`/health`）路由到这一个函数，文件末尾的 `export const config = { runtime: 'edge' }` 使其运行在 Edge Runtime 上。
 >
-> ℹ️ **为什么需要 `vercel.json` 和 `public/`？** 本仓库是纯 API 项目（无静态前端）。Vercel 的 "Other" 框架预设要求存在名为 `public/` 的输出目录——否则构建会报 `No Output Directory named "public" found`。空占位文件 `public/.gitkeep` 就是为此而设；重写规则则让函数可经由与 Netlify/Cloudflare 部署完全相同的路径访问。
+> 为什么需要 `vercel.json` 和 `public/`？ 本仓库是纯 API 项目（无静态前端）。Vercel 的 "Other" 框架预设要求存在名为 `public/` 的输出目录——否则构建会报 `No Output Directory named "public" found`。空占位文件 `public/.gitkeep` 就是为此而设；重写规则则让函数可经由与 Netlify/Cloudflare 部署完全相同的路径访问。
 
 ---
 
@@ -16,7 +16,7 @@
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
 
-1. 点击上方的 **Deploy** 按钮。
+1. 点击上方的 Deploy 按钮。
 2. 连接您的 GitHub 账号并创建仓库。
 3. （可选）在 **Environment Variables** 中设置 `API_KEY` 或 `COOKIE_STRING`。
 4. 点击 **Deploy**，部署完成后即可通过 `https://your-app-name.vercel.app` 访问。
@@ -31,7 +31,7 @@
    - **Build Command**：留空
    - **Output Directory**：留空
    - **Install Command**：留空
-5. 点击 **Deploy**。仓库自带的 `vercel.json` 已设置输出目录（`public/`）并将所有路径重写到 `api/gemini`，无需额外构建设置。
+5. 点击 Deploy。仓库自带的 `vercel.json` 已设置输出目录（`public/`）并将所有路径重写到 `api/gemini`，无需额外构建设置。
 
 ### 方案 3：Vercel CLI
 
@@ -57,16 +57,16 @@ vercel --prod   # 生产部署
 | `RATE_LIMIT_MAX` | Number | 单 IP 窗口期内最大允许请求数。 | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | 限流时间窗口（秒）。 | `60` |
 | `REQUEST_TIMEOUT_SEC` | Number | 单次上游请求超时（秒）。建议调小（如 `10`）以保持在 25 秒响应头时限内。 | `28` |
-| `ENABLE_PROXY` | String | 在支持原始 TCP Socket 的平台（如 Cloudflare Workers）启用轮换式**代理池**。**Vercel Edge 不支持**（无 TCP Socket API）——设置了也不生效，请求时会在日志中输出 `WARN` 告警。 | `false` |
-| `HTTPS_PROXY` | String | 静态出站代理地址。**在 Vercel 上仅作展示**：与 Netlify Edge（Deno）不同，Vercel 的 `fetch()` **不会**自动经 `HTTPS_PROXY` 建立隧道，该值仅由 `/health` 报告，不会实际生效。 | 直连 |
+| `ENABLE_PROXY` | String | 在支持原始 TCP Socket 的平台（如 Cloudflare Workers）启用轮换式代理池。**Vercel Edge 不支持**（无 TCP Socket API）——设置了也不生效，请求时会在日志中输出 `WARN` 告警。 | `false` |
+| `HTTPS_PROXY` | String | 静态出站代理地址。在 Vercel 上仅作展示：与 Netlify Edge（Deno）不同，Vercel 的 `fetch()` 不会自动经 `HTTPS_PROXY` 建立隧道，该值仅由 `/health` 报告，不会实际生效。 | 直连 |
 
-> ⚠️ **Vercel 代理说明**：Vercel Edge Functions **不提供原始 TCP Socket**（`cloudflare:sockets`），因此轮换式**代理池**（`ENABLE_PROXY`/`PROXY_ENABLED`）**在 Vercel 上不受支持**，会被忽略并在日志中输出 `WARN` 告警。与 Netlify Edge（Deno 原生支持 `HTTPS_PROXY` 隧道）不同，Vercel 的 Edge Runtime 也**不会**自动把 `fetch()` 经 `HTTPS_PROXY` 转发——直连是 Vercel 上唯一的出站模式。如需代理，请使用 Cloudflare Workers 部署。`/health` 端点的 `proxy.mode` 会显示实际生效模式（Vercel 上恒为 `direct`）。
+> Vercel 代理说明：Vercel Edge Functions 不提供原始 TCP Socket（`cloudflare:sockets`），因此轮换式代理池（`ENABLE_PROXY`/`PROXY_ENABLED`）在 Vercel 上不受支持，会被忽略并在日志中输出 WARN 告警。与 Netlify Edge（Deno 原生支持 `HTTPS_PROXY` 隧道）不同，Vercel 的 Edge Runtime 也不会自动把 `fetch()` 经 `HTTPS_PROXY` 转发——直连是 Vercel 上唯一的出站模式。如需代理，请使用 Cloudflare Workers 部署。`/health` 端点的 `proxy.mode` 会显示实际生效模式（Vercel 上恒为 `direct`）。
 
-> 💡 **多 Cookie 轮换**：支持多个 Cookie 轮换，用竖线 `|` 分隔即可，例如：`cookie1| cookie2| cookie3`。
+> 多 Cookie 轮换：支持多个 Cookie 轮换，用竖线 `|` 分隔即可，例如：`cookie1| cookie2| cookie3`。
 
 ---
 
-## 📏 平台限制（Edge Runtime）
+## 平台限制（Edge Runtime）
 
 | 限制 | 数值 | 本部署的应对方式 |
 |-|-|-|
@@ -77,7 +77,7 @@ vercel --prod   # 生产部署
 
 ---
 
-## 🔍 验证部署
+## 验证部署
 
 部署完成后，在浏览器访问或使用 curl 验证健康状态：
 
@@ -116,7 +116,7 @@ Vercel 上 `poolSupported` 恒为 `false`，`proxy.mode` 恒为 `direct`——�
 
 ---
 
-## 💻 客户端接入配置
+## 客户端接入配置
 
 ### NextChat (ChatGPT-Next-Web)
 
@@ -151,7 +151,7 @@ curl https://your-app-name.vercel.app/v1/chat/completions \
 
 ---
 
-## 🛠️ 本地开发与调试
+## 本地开发与调试
 
 可通过 Vercel CLI 在本地测试运行 Edge Function：
 
@@ -165,7 +165,7 @@ vercel dev
 
 ---
 
-## 🚨 故障排查
+## 故障排查
 
 ### `No Output Directory named "public" found after the Build completed`
 

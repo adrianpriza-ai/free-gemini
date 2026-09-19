@@ -32,6 +32,48 @@ test('[netlify] pre-response deadline is 30s (Netlify 40s limit minus margin)', 
   assert.equal(PRERESPONSE_DEADLINE_MS, 30 * 1000);
 });
 
+test('[netlify] HTTPS_PROXY env var switches /health proxy.mode to outbound', async () => {
+  // Netlify Edge runs on Deno, whose fetch() natively tunnels through
+  // HTTPS_PROXY/HTTP_PROXY/ALL_PROXY. The shared core only parses/reports the
+  // var (config.outboundProxy) — the tunneling itself is the runtime's job.
+  process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
+  try {
+    const { body } = await jsonOf(await handler(req('/health'), null));
+    assert.equal(body.proxy.mode, 'outbound');
+    assert.equal(body.proxy.enabled, true);
+    assert.equal(body.proxy.outboundProxy, '(set)');
+    // The pool stays unsupported: no raw TCP sockets on Netlify Edge.
+    assert.equal(body.proxy.poolSupported, false);
+  } finally {
+    delete process.env.HTTPS_PROXY;
+  }
+});
+
+test('[netlify] ENABLE_PROXY=true degrades gracefully to outbound/direct (no crash)', async () => {
+  // The rotating proxy pool needs raw TCP sockets (connect === null here), so
+  // ENABLE_PROXY is ignored with a WARN; requests must still work.
+  process.env.ENABLE_PROXY = 'true';
+  try {
+    const { body } = await jsonOf(await handler(req('/health'), null));
+    assert.equal(body.proxy.poolSupported, false);
+    assert.ok(['direct', 'outbound'].includes(body.proxy.mode));
+  } finally {
+    delete process.env.ENABLE_PROXY;
+  }
+});
+
+test('[netlify] HTTP_PROXY and ALL_PROXY are also recognized as outbound proxies', async () => {
+  for (const key of ['HTTP_PROXY', 'ALL_PROXY', 'https_proxy']) {
+    process.env[key] = 'http://127.0.0.1:7890';
+    try {
+      const { body } = await jsonOf(await handler(req('/health'), null));
+      assert.equal(body.proxy.mode, 'outbound', key + ' should report outbound mode');
+    } finally {
+      delete process.env[key];
+    }
+  }
+});
+
 test('[netlify] handler also exposes .fetch and .scheduled', async () => {
   assert.equal(typeof handler.fetch, 'function');
   assert.equal(typeof handler.scheduled, 'function');

@@ -2,11 +2,11 @@
 
 [中文文档](README_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/README.md) | [Deno Docs](../deno/README.md)
 
-Run Gemini Web2API on Vercel Edge Functions for true SSE streaming on Vercel's global edge network — zero config, no server to maintain.
+Run Gemini Web2API on Vercel Edge Functions for SSE streaming — zero config, no server to maintain.
 
-> 📁 The endpoint lives at [`api/gemini.js`](../api/gemini.js), a thin Vercel adapter over the shared core in [`src/`](../src/) (the same core used by the Cloudflare worker and the Netlify functions). [`vercel.json`](../vercel.json) routes every path (e.g. `/v1/chat/completions`, `/health`) to this single function via rewrites, and the `export const config = { runtime: 'edge' }` at the bottom of the file runs it on the Edge runtime.
+> The endpoint lives at [`api/gemini.js`](../api/gemini.js), a thin Vercel adapter over the shared core in [`src/`](../src/) (the same core used by the Cloudflare worker and the Netlify functions). [`vercel.json`](../vercel.json) routes every path (e.g. `/v1/chat/completions`, `/health`) to this single function via rewrites, and the `export const config = { runtime: 'edge' }` at the bottom of the file runs it on the Edge runtime.
 >
-> ℹ️ **Why `vercel.json` + `public/`?** This repo is API-only (no static frontend). Vercel's "Other" framework preset expects an output directory named `public/` — without it the build fails with `No Output Directory named "public" found`. The empty `public/.gitkeep` satisfies that, and the rewrite rules make the function reachable at the same paths as the Netlify/Cloudflare deployments.
+> Why `vercel.json` + `public/`? This repo is API-only (no static frontend). Vercel's "Other" framework preset expects an output directory named `public/` — without it the build fails with `No Output Directory named "public" found`. The empty `public/.gitkeep` satisfies that, and the rewrite rules make the function reachable at the same paths as the Netlify/Cloudflare deployments.
 
 ---
 
@@ -16,7 +16,7 @@ Run Gemini Web2API on Vercel Edge Functions for true SSE streaming on Vercel's g
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/adrianpriza-ai/free-gemini)
 
-1. Click the **Deploy** button above.
+1. Click the Deploy button above.
 2. Connect your GitHub account and choose a repository name.
 3. (Optional) In **Environment Variables**, configure `API_KEY` or `COOKIE_STRING`.
 4. Click **Deploy**. Your API is live at `https://your-app-name.vercel.app`.
@@ -30,8 +30,8 @@ Run Gemini Web2API on Vercel Edge Functions for true SSE streaming on Vercel's g
    - **Framework Preset**: `Other`
    - **Build Command**: (leave empty)
    - **Output Directory**: (leave empty)
-   - **Install Command**: (leave empty)
-5. Click **Deploy**. The repo's `vercel.json` sets the output directory (`public/`) and rewrites all paths to `api/gemini` — no build settings needed.
+   - Install Command: (leave empty)
+5. Click Deploy. The repo's `vercel.json` sets the output directory (`public/`) and rewrites all paths to `api/gemini` — no build settings needed.
 
 ### Option 3: Vercel CLI
 
@@ -57,16 +57,16 @@ Configure these in Vercel: **Project Settings** → **Environment Variables** (o
 | `RATE_LIMIT_MAX` | Number | Max requests per IP in the window. | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | Rate limit window in seconds. | `60` |
 | `REQUEST_TIMEOUT_SEC` | Number | Per-attempt upstream timeout in seconds. Keep small (e.g. `10`) to stay inside the 25s header deadline. | `28` |
-| `ENABLE_PROXY` | String | Enables the rotating **proxy pool** on platforms with raw TCP sockets (e.g. Cloudflare Workers). **Not supported on Vercel Edge** (no TCP socket API) — setting it has no effect; a `WARN` is logged at request time. | `false` |
+| `ENABLE_PROXY` | String | Enables the rotating proxy pool on platforms with raw TCP sockets (e.g. Cloudflare Workers). **Not supported on Vercel Edge** (no TCP socket API) — setting it has no effect; a `WARN` is logged at request time. | `false` |
 | `HTTPS_PROXY` | String | Static outbound proxy URL. **Informational only on Vercel**: unlike Netlify Edge (Deno), Vercel's `fetch()` does **not** automatically tunnel through `HTTPS_PROXY`, so this value is reported by `/health` but not applied. | none (direct) |
 
-> ⚠️ **Proxy support on Vercel**: Vercel Edge Functions do **not** provide raw TCP sockets (`cloudflare:sockets`), so the rotating **proxy pool** (`ENABLE_PROXY`/`PROXY_ENABLED`) is **not supported** on Vercel and is ignored with a `WARN` in the logs. Unlike Netlify Edge (Deno-based, native `HTTPS_PROXY` tunneling), Vercel's Edge runtime does **not** auto-tunnel `fetch()` through `HTTPS_PROXY` either — direct connection is the only outbound mode on Vercel. If you need a proxy, use the Cloudflare Workers deployment. The `/health` endpoint reports the effective mode under `proxy.mode` (`direct` on Vercel).
+> Proxy support on Vercel: Vercel Edge Functions do not provide raw TCP sockets (`cloudflare:sockets`), so the rotating proxy pool (`ENABLE_PROXY`/`PROXY_ENABLED`) is not supported on Vercel and is ignored with a `WARN` in the logs. Unlike Netlify Edge (Deno-based, native `HTTPS_PROXY` tunneling), Vercel's Edge runtime does not auto-tunnel `fetch()` through `HTTPS_PROXY` either — direct connection is the only outbound mode on Vercel. If you need a proxy, use the Cloudflare Workers deployment. The `/health` endpoint reports the effective mode under `proxy.mode` (`direct` on Vercel).
 
-> 💡 **Tip for Multiple Cookies**: You can rotate between multiple Google accounts by separating cookies with a pipe character (`|`), e.g. `cookie_account_1| cookie_account_2`.
+> Tip for Multiple Cookies: You can rotate between multiple Google accounts by separating cookies with a pipe character (`|`), e.g. `cookie_account_1| cookie_account_2`.
 
 ---
 
-## 📏 Platform Limits (Edge Runtime)
+## Platform Limits (Edge Runtime)
 
 | Limit | Value | How this deployment handles it |
 |-|-|-|
@@ -77,7 +77,7 @@ Configure these in Vercel: **Project Settings** → **Environment Variables** (o
 
 ---
 
-## 🔍 Verification
+## Verification
 
 Once deployed, check your health endpoint in your browser or with curl:
 
@@ -116,7 +116,7 @@ On Vercel, `poolSupported` is always `false` and `proxy.mode` is always `direct`
 
 ---
 
-## 💻 Client Configuration
+## Client Configuration
 
 ### NextChat / ChatGPT-Next-Web
 
@@ -165,7 +165,7 @@ The local server will start at `http://localhost:3000`, with the same rewrite ro
 
 ---
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### `No Output Directory named "public" found after the Build completed`
 

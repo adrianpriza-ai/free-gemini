@@ -2,17 +2,17 @@
 
 [中文文档](NETLIFY_CN.md) | [Cloudflare Docs](../cloudflare/README.md) | [Netlify Docs](../netlify/README.md) | [Deno Docs](../deno/README.md)
 
-Run Gemini Web2API on Netlify Edge Functions for true SSE streaming, low latency worldwide, and no server to maintain.
+Run Gemini Web2API on Netlify Edge Functions for SSE streaming and no server maintenance.
 
 ---
 
-## ⚡ Quick Deploy
+## Quick Deploy
 
 ### Option 1: 1-Click Deploy to Netlify
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/adrianpriza-ai/free-gemini)
 
-1. Click the **Deploy to Netlify** button above.
+1. Click the Deploy to Netlify button above.
 2. Connect your GitHub account and choose a repository name.
 3. (Optional) In **Environment Variables**, configure `API_KEY` or `COOKIE_STRING`.
 4. Click **Deploy**. Your API is live within a minute at `https://your-app-name.netlify.app`.
@@ -29,12 +29,12 @@ Run Gemini Web2API on Netlify Edge Functions for true SSE streaming, low latency
    - **Base directory**: (leave blank)
    - **Build command**: (leave blank)
    - **Publish directory**: (leave blank)
-6. Click **Deploy site**.
+6. Click Deploy site.
 7. Netlify will automatically detect `netlify.toml` and configure the edge function at `/*`.
 
 ---
 
-## ⚙️ Environment Variables (Optional)
+## Environment Variables (Optional)
 
 Configure these in Netlify: **Site configuration** → **Environment variables** → **Add a variable**.
 
@@ -47,16 +47,23 @@ Configure these in Netlify: **Site configuration** → **Environment variables**
 | `GEMINI_BL` | String | Gemini web build label (e.g. `boq_assistant-bard-web-server_...`). | built-in latest |
 | `RATE_LIMIT_MAX` | Number | Max requests per IP in the window. | `3000` |
 | `RATE_LIMIT_WINDOW` | Number | Rate limit window in seconds. | `60` |
-| `ENABLE_PROXY` | String | Enables the rotating **proxy pool** on platforms with raw TCP sockets (e.g. Cloudflare Workers). **Not supported on Netlify Edge** (no TCP socket API) — setting it has no effect; a `WARN` is logged at request time. Use `HTTPS_PROXY` below instead. | `false` |
-| `HTTPS_PROXY` | String | Static outbound proxy URL (e.g. `http://user:pass@proxy:port`). Netlify Edge runs on Deno, whose `fetch()` reads `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` natively, so direct requests are tunneled automatically. `HTTP_PROXY` and `ALL_PROXY` are also honored. | none (direct) |
+| `ENABLE_PROXY` | String | Enables the rotating proxy pool on platforms with raw TCP sockets (e.g. Cloudflare Workers). **Not supported on Netlify Edge** (the runtime exposes only web-standard APIs, no `Deno.connect`) — setting it has no effect beyond a `WARN` in the logs; requests still work via the mode below. Use `HTTPS_PROXY` instead. | `false` |
+| `HTTPS_PROXY` | String | Static outbound proxy URL (e.g. `http://user:pass@proxy:port`). Netlify Edge Functions run on Deno, whose `fetch()` reads `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` natively — once set, every upstream request is tunneled through the proxy automatically, no code or adapter change needed. `HTTP_PROXY`, `ALL_PROXY` (and lowercase variants) are also honored; use `NO_PROXY` to exempt hosts. | none (direct) |
 
-> ⚠️ **Proxy support on Netlify**: Netlify Edge Functions do **not** provide raw TCP sockets (`cloudflare:sockets`), so the rotating **proxy pool** (`ENABLE_PROXY`/`PROXY_ENABLED`) is **not supported** on Netlify and is ignored with a `WARN` in the logs. To route traffic through a proxy on Netlify, set **`HTTPS_PROXY`** instead (Deno's `fetch()` tunnels through it automatically). The `/health` endpoint reports the effective mode under `proxy.mode` (`direct`, `outbound`, or `pool`).
+> Proxy support on Netlify: Netlify Edge Functions do not provide raw TCP sockets (`Deno.connect` / `cloudflare:sockets`), so the rotating proxy pool (`ENABLE_PROXY`/`PROXY_ENABLED`) is not supported on Netlify and is ignored with a `WARN` in the logs. To route traffic through a proxy on Netlify, set `HTTPS_PROXY` instead — this is the same native Deno tunneling the [Deno Deploy](../deno/README.md) deployment gets, and it works out of the box because Edge Functions run on Deno.
+>
+> Check `/health` after setting `HTTPS_PROXY`: `proxy.mode` should flip from `direct` to `outbound` and `proxy.enabled` to `true` (the proxy URL value itself is never reported). If it still says `direct`, the two usual causes are:
+>
+> 1. Scope: the environment variable's scope must include **Functions** (Netlify Dashboard → Site configuration → Environment variables → the variable's scope checkboxes), otherwise Edge Functions never see it at runtime.
+> 2. Redeploy: environment variables are injected at deploy time — trigger a redeploy after adding/changing `HTTPS_PROXY`.
+>
+> Node.js runtime caveat: the above applies to **Edge Functions** (`netlify/edge-functions/`, Deno). The classic **Netlify Functions** runtime (`netlify/functions/`, Node.js) does **not** auto-tunnel `fetch()` through `HTTPS_PROXY` — on Node 18+ you'd need a custom dispatcher (e.g. `undici.ProxyAgent`). This repo's Netlify deployment uses the Edge function at `/*`, so `HTTPS_PROXY` works as described.
 
-> 💡 **Tip for Multiple Cookies**: You can rotate between multiple Google accounts by separating cookies with a pipe character (`|`), e.g. `cookie_account_1| cookie_account_2`.
+> Tip for Multiple Cookies: You can rotate between multiple Google accounts by separating cookies with a pipe character (`|`), e.g. `cookie_account_1| cookie_account_2`.
 
 ---
 
-## 🔍 Verification
+## Verification
 
 Once deployed, check your health endpoint in your browser or with curl:
 
@@ -91,11 +98,11 @@ Expected response:
 }
 ```
 
-The `proxy` block reflects the actual outbound mode: `direct` (default), `outbound` (static `HTTPS_PROXY` in effect), or `pool` (rotating proxy pool — Cloudflare Workers only). Note that `poolSupported` is always `false` on Netlify Edge, so `ENABLE_PROXY=true` alone can never switch the mode to `pool` here; use `HTTPS_PROXY` to get `"mode": "outbound"`.
+The `proxy` block reflects the actual outbound mode: `direct` (default), `outbound` (static `HTTPS_PROXY` in effect), or `pool` (rotating proxy pool — Cloudflare Workers and Deno Deploy only). Note that `poolSupported` is always `false` on Netlify Edge, so `ENABLE_PROXY=true` alone can never switch the mode to `pool` here; use `HTTPS_PROXY` to get `"mode": "outbound"` — that's the supported way to proxy upstream traffic on Netlify.
 
 ---
 
-## 💻 Client Configuration
+## Client Configuration
 
 ### NextChat / ChatGPT-Next-Web
 
@@ -130,7 +137,7 @@ curl https://your-app-name.netlify.app/v1/chat/completions \
 
 ---
 
-## 🛠️ Local Development
+## Local Development
 
 You can run and test the Netlify Edge Function locally using Netlify CLI:
 
@@ -143,7 +150,7 @@ The local edge server will start at `http://localhost:8888`.
 
 ---
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### `Error - Request ID: 01M...`
 
