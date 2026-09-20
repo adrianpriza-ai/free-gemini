@@ -105,15 +105,19 @@ Supports Google native API endpoints:
 
 | Model | Description | Output |
 |-|-|-|
-| `gemini-3.8-flash` | Newest all-around model (Gemini 3.8 Flash) | ~12k chars |
-| `gemini-3.7-flash` | Latest all-around model (Gemini 3.7 Flash) | ~12k chars |
-| `gemini-3.6-flash` | All-around model | ~12k chars |
-| `gemini-3.5-flash` | Alias for gemini-3.6-flash | ~12k chars |
-| `gemini-3.5-flash-thinking` | Extended thinking, longest output | ~20k chars |
-| `gemini-3.5-flash-thinking-lite` | Adaptive thinking depth | ~15k chars |
-| `gemini-3.1-pro` | Advanced math & code (needs cookie) | ~12k chars |
+| `gemini-3.8-flash` | Latest workhorse model, best reasoning & coding (Sep 2026) | ~12k chars |
+| `gemini-3.8-flash-thinking` | Deep thinking mode on the latest Flash backend | ~20k chars |
+| `gemini-3.7-flash` | All-around model (Gemini 3.7 Flash) | ~12k chars |
+| `gemini-3.6-flash` | All-around model (Gemini 3.6 Flash) | ~12k chars |
+| `gemini-3.5-flash` | All-around model (Gemini 3.5 Flash) | ~12k chars |
+| `gemini-3.5-flash-lite` | Cost-efficient high-capacity model (Gemini 3.5 Flash-Lite) | ~10k chars |
+| `gemini-3.1-flash-lite` | Cost-efficient high-capacity model (Gemini 3.1 Flash-Lite) | ~10k chars |
+| `gemini-3.5-flash-thinking` | Deep thinking mode, longest output (~20k chars) | ~20k chars |
+| `gemini-3.5-flash-thinking-lite` | Dynamic thinking with adaptive depth | ~15k chars |
+| `gemini-3.1-pro` | Pro model (requires cookie for real routing) | ~12k chars |
+| `gemini-3.1-pro-enhanced` | Pro with enhanced output (experimental) | ~12k chars |
 | `gemini-auto` | Auto model selection | varies |
-| `gemini-flash-lite` | Fastest answers, lightweight | ~10k chars |
+| `gemini-flash-lite` | Lightweight fast model | ~10k chars |
 
 ### Thinking Depth
 

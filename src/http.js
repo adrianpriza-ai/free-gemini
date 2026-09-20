@@ -3,6 +3,7 @@
 // Rate limiting, API key checks, JSON/SSE helpers and model resolution.
 
 import { MODELS } from './models.js';
+import { log } from './utils.js';
 
 var rateLimitStore = new Map();
 
@@ -198,13 +199,16 @@ export function sendSSE(stream) {
  * 
  * @param {string} modelName - 模型名称
  *   格式: "模型名" 或 "模型名@think=数字"
- * @returns {Object} 
- *   - modelName: 去掉 @think= 参数后的实际模型名称
+ * @param {string} [defaultModel] - 未知模型名时的回退目标；
+ *   默认 'gemini-3.6-flash'（与 Python 版 resolve_model 的参数默认值一致）
+ * @returns {Object}
+ *   - modelName: 去掉 @think= 参数后的实际模型名称（未知模型回退后为默认模型名）
  *   - modelId: MODE_CATEGORY 枚举值（1-6）
  *   - thinkMode: 思考模式（0=深度思考, 4=自动）
+ *   - extra: 附加 payload 字段对象（模型定义了 extra 时），无则为 null
  *   - error: 错误信息，null 表示正常
  */
-export function resolveModel(modelName) {
+export function resolveModel(modelName, defaultModel) {
   var thinkOverride = null;
 
   // 🛡️ 防御性类型检查：客户端可能传入数字、null、对象等非字符串类型的 model。
@@ -229,9 +233,15 @@ export function resolveModel(modelName) {
   }
 
   // 查找模型配置
+  // 未知模型名回退到默认模型（与 Python 版 resolve_model 行为一致）：
+  // 上游客户端可能请求任意模型标识符（如 gpt-4o），不应直接报错。
   var cfg = MODELS[actualModelName];
   if (!cfg) {
-    return { error: '未知模型: ' + actualModelName };
+    defaultModel = defaultModel || 'gemini-3.6-flash';  // 内置兜底，与 Python 版参数默认值一致
+    if (!MODELS[defaultModel]) defaultModel = 'gemini-3.6-flash';  // 🛡️ 默认模型本身配置错误时的最终兜底
+    log("Unknown model '" + actualModelName + "', falling back to '" + defaultModel + "'", 'WARN');
+    actualModelName = defaultModel;
+    cfg = MODELS[defaultModel];
   }
 
   // 返回解析结果
@@ -239,6 +249,7 @@ export function resolveModel(modelName) {
     modelName: actualModelName,
     modelId: cfg.mode,                                            // 模型类别 ID
     thinkMode: thinkOverride !== null ? thinkOverride : cfg.think,  // 使用覆盖值或默认值
+    extra: cfg.extra || null,                                     // 附加 payload 字段（如增强输出开关）
     error: null,
   };
 }

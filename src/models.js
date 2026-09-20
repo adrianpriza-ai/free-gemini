@@ -22,12 +22,17 @@ export var MODELS = {
   'gemini-3.8-flash': {
     mode: 1,        // FAST - 快速模式
     think: 4,       // AUTO - 自动选择思考深度
-    desc: 'Newest all-around model (Gemini 3.8 Flash)',
+    desc: 'Latest workhorse model, best reasoning & coding (Sep 2026)',
+  },
+  'gemini-3.8-flash-thinking': {
+    mode: 2,        // THINKING - 深度思考模式
+    think: 0,       // 启用深度思考
+    desc: 'Deep thinking mode on the latest Flash backend',
   },
   'gemini-3.7-flash': {
     mode: 1,        // FAST - 快速模式
     think: 4,       // AUTO - 自动选择思考深度
-    desc: 'Latest all-around model (Gemini 3.7 Flash)',
+    desc: 'All-around model (Gemini 3.7 Flash)',
   },
   'gemini-3.6-flash': {
     mode: 1,        // FAST - 快速模式
@@ -37,7 +42,17 @@ export var MODELS = {
   'gemini-3.5-flash': {
     mode: 1,        // FAST
     think: 4,       // AUTO
-    desc: 'Alias for gemini-3.6-flash (backend upgraded)',
+    desc: 'All-around model (Gemini 3.5 Flash)',
+  },
+  'gemini-3.5-flash-lite': {
+    mode: 6,        // FLASH_LITE - 轻量快速
+    think: 4,       // AUTO
+    desc: 'Cost-efficient high-capacity model (Gemini 3.5 Flash-Lite)',
+  },
+  'gemini-3.1-flash-lite': {
+    mode: 6,        // FLASH_LITE - 轻量快速
+    think: 4,       // AUTO
+    desc: 'Cost-efficient high-capacity model (Gemini 3.1 Flash-Lite)',
   },
   'gemini-3.5-flash-thinking': {
     mode: 2,        // THINKING - 深度思考模式
@@ -48,6 +63,12 @@ export var MODELS = {
     mode: 3,        // PRO - 专业版
     think: 4,       // AUTO
     desc: 'Pro model (requires cookie for real routing)',
+  },
+  'gemini-3.1-pro-enhanced': {
+    mode: 3,        // PRO - 专业版
+    think: 4,       // AUTO
+    extra: { 31: 2, 80: 3 },  // 附加 payload 字段（增强输出开关，实验性）
+    desc: 'Pro with enhanced output (experimental)',
   },
   'gemini-auto': {
     mode: 4,        // AUTO - 自动模型选择

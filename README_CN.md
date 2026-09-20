@@ -103,15 +103,19 @@ gemini
 
 | 模型 | 说明 | 输出长度 |
 |-|-|-|
-| `gemini-3.8-flash` | 最新全能模型（Gemini 3.8 Flash） | ~12k 字符 |
-| `gemini-3.7-flash` | 最新全能模型（Gemini 3.7 Flash） | ~12k 字符 |
-| `gemini-3.6-flash` | 全能模型 | ~12k 字符 |
-| `gemini-3.5-flash` | 3.6 Flash 的别名 | ~12k 字符 |
-| `gemini-3.5-flash-thinking` | 扩展思考, 最长输出 | ~2万字 |
-| `gemini-3.5-flash-thinking-lite` | 自适应思考深度 | ~1.5万字 |
-| `gemini-3.1-pro` | 高级数学与代码 (需 cookie) | ~1.2万字 |
+| `gemini-3.8-flash` | 最新工作马模型，推理和编码表现最佳（2026年9月） | ~12k 字符 |
+| `gemini-3.8-flash-thinking` | 最新 Flash 后端上的深度思考模式 | ~20k 字符 |
+| `gemini-3.7-flash` | 全能模型（Gemini 3.7 Flash） | ~12k 字符 |
+| `gemini-3.6-flash` | 全能模型（Gemini 3.6 Flash） | ~12k 字符 |
+| `gemini-3.5-flash` | 全能模型（Gemini 3.5 Flash） | ~12k 字符 |
+| `gemini-3.5-flash-lite` | 成本效益高的大容量模型（Gemini 3.5 Flash-Lite） | ~10k 字符 |
+| `gemini-3.1-flash-lite` | 成本效益高的大容量模型（Gemini 3.1 Flash-Lite） | ~10k 字符 |
+| `gemini-3.5-flash-thinking` | 深度思考模式，最长输出（~20k 字符） | ~20k 字符 |
+| `gemini-3.5-flash-thinking-lite` | 自适应深度的动态思考 | ~1.5万字 |
+| `gemini-3.1-pro` | Pro 模型（需要 cookie 才能真实路由） | ~1.2万字 |
+| `gemini-3.1-pro-enhanced` | 增强输出的 Pro 模型（实验性） | ~1.2万字 |
 | `gemini-auto` | 自动选择模型 | 不定 |
-| `gemini-flash-lite` | 最快响应, 轻量 | ~1万字 |
+| `gemini-flash-lite` | 轻量级快速模型 | ~1万字 |
 
 ### 思考深度
 

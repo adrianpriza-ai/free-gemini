@@ -350,29 +350,6 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 
 ---
 
-## 📊 支持模型列表
-
-| 模型 ID | 类型 | 说明 |
-|-|-|-|
-| `gemini-3.8-flash` | FAST | 最新全能模型（Gemini 3.8 Flash） |
-| `gemini-3.7-flash` | FAST | 最新全能模型（Gemini 3.7 Flash） |
-| `gemini-3.6-flash` | FAST | 全能模型（Gemini 3.6 Flash） |
-| `gemini-3.5-flash` | FAST | 3.6 Flash 的别名 |
-| `gemini-3.5-flash-thinking` | THINKING | 深度思考模式 |
-| `gemini-3.1-pro` | PRO | 专业版（需 Cookie） |
-| `gemini-auto` | AUTO | 自动模型选择 |
-| `gemini-3.5-flash-thinking-lite` | DYNAMIC | 自适应动态思考 |
-| `gemini-flash-lite` | LITE | 轻量级快速模型 |
-| `gemini-2.5-flash` | FAST | 客户端兼容别名（路由至 3.6 Flash） |
-| `gemini-2.0-flash` | FAST | 客户端兼容别名（路由至 3.6 Flash） |
-| `gemini-2.5-pro` | PRO | 客户端兼容别名（路由至 3.1 Pro） |
-
-支持通过 `@think=` 参数覆盖思考模式：
-- `gemini-3.6-flash@think=0` — Flash 模型 + 深度思考
-- `gemini-3.1-pro@think=4` — Pro 模型 + 自动思考
-
----
-
 ## 📝 更新日志
 
 | 版本 | 日期 | 更新内容 |
@@ -385,7 +362,6 @@ SAPISID = "sapisid_1| sapisid_2| sapisid_3"
 | 1.5.0 | 2026-07-31 | 新增多指纹轮换、多Cookie轮换、随机延迟机制 |
 | 1.4.0 | 2026-07-30 | 修复并发串扰、速率限制内存安全 |
 | 1.3.0 | 2026-07-29 | 修复 SSE 流式格式、NextChat 兼容性 |
-| 1.0.0 | 2026-07-16 | 初始版本，基于 gemini-web2api v1.1.0 移植 |
 
 ---
 

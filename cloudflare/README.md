@@ -350,29 +350,6 @@ Solution: Current version has resolved this issue through request-level configur
 
 ---
 
-## 📊 Supported Model List
-
-| Model ID | Type | Description |
-|-|-|-|
-| `gemini-3.8-flash` | FAST | Newest all-round model (Gemini 3.8 Flash) |
-| `gemini-3.7-flash` | FAST | Latest all-round model (Gemini 3.7 Flash) |
-| `gemini-3.6-flash` | FAST | All-round model (Gemini 3.6 Flash) |
-| `gemini-3.5-flash` | FAST | Alias for 3.6 Flash |
-| `gemini-3.5-flash-thinking` | THINKING | Deep thinking mode |
-| `gemini-3.1-pro` | PRO | Professional version (requires Cookie) |
-| `gemini-auto` | AUTO | Automatic model selection |
-| `gemini-3.5-flash-thinking-lite` | DYNAMIC | Adaptive dynamic thinking |
-| `gemini-flash-lite` | LITE | Lightweight fast model |
-| `gemini-2.5-flash` | FAST | Client compatibility alias (routes to 3.6 Flash) |
-| `gemini-2.0-flash` | FAST | Client compatibility alias (routes to 3.6 Flash) |
-| `gemini-2.5-pro` | PRO | Client compatibility alias (routes to 3.1 Pro) |
-
-Supports overriding thinking mode via `@think=` parameter:
-- `gemini-3.6-flash@think=0` — Flash model + deep thinking
-- `gemini-3.1-pro@think=4` — Pro model + automatic thinking
-
----
-
 ## 📝 Changelog
 
 | Version | Date | Update Content |
@@ -385,7 +362,6 @@ Supports overriding thinking mode via `@think=` parameter:
 | 1.5.0 | 2026-07-31 | Added multi-fingerprint rotation, multi-Cookie rotation, random delay mechanism |
 | 1.4.0 | 2026-07-30 | Fixed concurrent crosstalk, rate limiting memory safety |
 | 1.3.0 | 2026-07-29 | Fixed SSE streaming format, NextChat compatibility |
-| 1.0.0 | 2026-07-16 | Initial version, ported from gemini-web2api v1.1.0 |
 
 ---
 

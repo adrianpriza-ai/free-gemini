@@ -20,10 +20,96 @@ import {
   extractResponseText,
   messagesToPrompt,
   parseToolCalls,
+  toolNames,
   googleContentsToPrompt,
 } from './gemini.js';
 import { geminiFetch, globalProxyState, refreshProxyPool } from './proxy.js';
 import { sendJSON, sendSSE, resolveModel } from './http.js';
+
+// 📋 流式工具调用 - OpenAI 规范的增量块
+//
+// gemini_web2api/server.py 中 _stream_tool_calls 的等价实现。
+// 每个 tool_call 拆分为:
+//   1. 角色块  { delta: { role: 'assistant' } }
+//   2. 头块    { delta: { tool_calls: [{ index, id, type, function: { name, arguments: '' } }] } }
+//   3. 参数切片 { delta: { tool_calls: [{ index, function: { arguments: '...' } }] } }
+//   4. 结束块  finish_reason: 'tool_calls'，随后 [DONE]
+// index 是必需的 —— 客户端靠它把分片的 arguments 重新组装成完整 JSON。
+
+var CHUNK_ARG_SLICE = 120;  // 每片 arguments 的最大字符数
+
+/**
+ * 构建一个符合 OpenAI 规范的 chat.completion.chunk 对象。
+ *
+ * @param {string} chatId - 会话 ID
+ * @param {string} modelName - 模型名
+ * @param {Object} delta - 增量内容
+ * @param {string|null} [finishReason] - 结束原因；未传时为 null
+ */
+function buildChunk(chatId, modelName, delta, finishReason) {
+  return {
+    id: chatId,
+    object: 'chat.completion.chunk',
+    created: timestamp(),
+    model: modelName,
+    choices: [{ index: 0, delta: delta, finish_reason: finishReason === undefined ? null : finishReason }],
+  };
+}
+
+/**
+ * 将完整解析出的 tool_calls 以 OpenAI 规范的流式增量返回。
+ *
+ * @param {string} chatId - 会话 ID
+ * @param {string} modelName - 模型名
+ * @param {Array} toolCalls - OpenAI 格式的工具调用数组
+ * @param {number} [argSlice] - 每片 arguments 的字符数（默认 120）
+ * @returns {ReadableStream} SSE 流
+ */
+export function streamToolCallsSSE(chatId, modelName, toolCalls, argSlice) {
+  var slice = typeof argSlice === 'number' && argSlice > 0 ? argSlice : CHUNK_ARG_SLICE;
+  var encoder = new TextEncoder();
+
+  return new ReadableStream({
+    start: function (controller) {
+      var write = function (delta, finishReason) {
+        var chunk = buildChunk(chatId, modelName, delta, finishReason);
+        controller.enqueue(encoder.encode('data: ' + JSON.stringify(chunk) + '\n\n'));
+      };
+
+      // 首块：声明 assistant 角色
+      write({ role: 'assistant' });
+
+      for (var i = 0; i < toolCalls.length; i++) {
+        var tc = toolCalls[i];
+        var fn = tc.function || {};
+
+        // 头块：index + id + 函数名（arguments 置空）
+        write({
+          role: 'assistant',
+          tool_calls: [{
+            index: i,
+            id: tc.id,
+            type: 'function',
+            function: { name: fn.name || '', arguments: '' },
+          }],
+        });
+
+        // 参数切片：客户端按 index 拼接
+        var args = fn.arguments || '';
+        for (var j = 0; j < args.length; j += slice) {
+          write({
+            tool_calls: [{ index: i, function: { arguments: args.slice(j, j + slice) } }],
+          });
+        }
+      }
+
+      // 结束块 + [DONE]
+      write({}, 'tool_calls');
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+}
 
 // 📋 核心请求处理 - /v1/chat/completions
 
@@ -65,6 +151,7 @@ export async function handleChatCompletions(request, body, config) {
   var modelName = resolved.modelName;
   var modelId = resolved.modelId;
   var thinkMode = resolved.thinkMode;
+  var extraFields = resolved.extra;   // 附加 payload 字段（gemini-3.1-pro-enhanced 等）
   var tools = body.tools || null;
 
   // -- 第二步：转换消息为提示文本
@@ -85,15 +172,15 @@ export async function handleChatCompletions(request, body, config) {
   if (!stream || tools) {
     try {
       // 调用 Gemini API 获取完整响应
-      var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config);
+      var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config, extraFields);
 
       // 提取并清理响应文本
       var text = extractResponseText(raw);
       var toolCalls = null;
 
-      // 如果启用了工具，解析工具调用
+      // 如果启用了工具，解析工具调用（validNames 过滤幻觉出的工具名）
       if (tools && text) {
-        var parsed = parseToolCalls(text);
+        var parsed = parseToolCalls(text, toolNames(tools));
         text = parsed.cleanText;
         toolCalls = parsed.toolCalls.length > 0 ? parsed.toolCalls : null;
       }
@@ -106,8 +193,11 @@ export async function handleChatCompletions(request, body, config) {
 
       var finishReason = toolCalls ? 'tool_calls' : 'stop';
 
-      // 如果要求流式但有工具调用，以单块 SSE 的方式返回
+      // 流式模式：按 OpenAI 规范把工具调用拆成增量块
       if (stream) {
+        if (toolCalls) {
+          return sendSSE(streamToolCallsSSE(chatId, modelName, toolCalls));
+        }
         var encoder = new TextEncoder();
         var nonStreamSSE = new ReadableStream({
           start: function (controller) {
@@ -238,7 +328,7 @@ export async function handleChatCompletions(request, body, config) {
           }, 2000);
 
           // -- 第三步：构建并发送 Gemini 请求（含重试逻辑）
-          var reqBody = buildPayload(prompt, modelId, thinkMode, config);
+          var reqBody = buildPayload(prompt, modelId, thinkMode, config, extraFields);
           var url = buildUrl(config);
 
           // 🎭 请求前随机延迟（与非流式保持一致）
@@ -529,6 +619,7 @@ export async function handleResponses(request, body, config) {
   var modelName = resolved.modelName;
   var modelId = resolved.modelId;
   var thinkMode = resolved.thinkMode;
+  var extraFields = resolved.extra;   // 附加 payload 字段（gemini-3.1-pro-enhanced 等）
   var messages = [];
 
   // 添加系统指令（instructions 字段）
@@ -597,13 +688,13 @@ export async function handleResponses(request, body, config) {
 
   try {
     // 调用 Gemini API
-    var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config);
+    var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config, extraFields);
     var text = extractResponseText(raw);
     var toolCalls = null;
 
-    // 解析工具调用
+    // 解析工具调用（validNames 过滤幻觉出的工具名）
     if (tools && text) {
-      var parsed = parseToolCalls(text);
+      var parsed = parseToolCalls(text, toolNames(tools));
       text = parsed.cleanText;
       toolCalls = parsed.toolCalls.length > 0 ? parsed.toolCalls : null;
     }
@@ -687,6 +778,7 @@ export async function handleGoogleAPI(request, body, stream, config) {
 
   var modelId = resolved.modelId;
   var thinkMode = resolved.thinkMode;
+  var extraFields = resolved.extra;   // 附加 payload 字段（gemini-3.1-pro-enhanced 等）
 
   // 转换 Google 格式为提示文本
   var prompt = googleContentsToPrompt(body);
@@ -695,7 +787,7 @@ export async function handleGoogleAPI(request, body, stream, config) {
   }
 
   try {
-    var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config);
+    var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config, extraFields);
     var text = extractResponseText(raw);
 
     // 构建 Google 格式的响应

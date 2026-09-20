@@ -62,9 +62,11 @@ import { geminiFetch } from './proxy.js';
  * @param {number} modelId - 模型类别 ID（MODE_CATEGORY 枚举值: 1-6）
  * @param {number} thinkMode - 思考模式设置（0=深度思考, 4=自动）
  * @param {Object} config - 请求级配置对象
+ * @param {Object} [extraFields] - 附加 payload 字段（键为 payload 索引，
+ *   如 gemini-3.1-pro-enhanced 的 {31: 2, 80: 3}），可选
  * @returns {string} URL 编码的请求体字符串，格式为 "f.req=..."
  */
-export function buildPayload(prompt, modelId, thinkMode, config) {
+export function buildPayload(prompt, modelId, thinkMode, config, extraFields) {
   // 创建 80 个元素的数组，所有元素初始化为 null
   // 这是 Gemini Web 前端实际使用的数据结构
   var inner = new Array(80).fill(null);
@@ -124,6 +126,15 @@ export function buildPayload(prompt, modelId, thinkMode, config) {
   //   1=FAST（快速）, 2=THINKING（深度思考）, 3=PRO（专业版）
   //   4=AUTO（自动）, 5=FAST_DYNAMIC_THINKING, 6=FLASH_LITE
   inner[79] = modelId;
+
+  // -- 附加字段（模型定义的 extra，如 gemini-3.1-pro-enhanced 的 {31: 2, 80: 3}）
+  // 与 Python 版 _build_payload 一致：直接按索引合并进 payload 数组。
+  // 索引可能达到基础数组长度之外（如 80 > 79），JS 数组会自动扩展。
+  if (extraFields) {
+    for (var ek in extraFields) {
+      inner[Number(ek)] = extraFields[ek];
+    }
+  }
 
   // -- 外层包装
   // Gemini 的请求体是双层嵌套 JSON:
@@ -296,7 +307,7 @@ export async function buildHeaders(config) {
  * @returns {Promise<string>} API 原始响应文本（包含嵌套 JSON）
  * @throws {Error} 所有重试失败后抛出最后的错误
  */
-export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
+export async function geminiStreamGenerate(prompt, modelId, thinkMode, config, extraFields) {
   // ⏱️ 响应头截止时间（重要：Netlify Edge 平台限制）
   //
   // Netlify Edge Functions 要求响应头必须在 40 秒内发出，否则平台会
@@ -366,7 +377,7 @@ export async function geminiStreamGenerate(prompt, modelId, thinkMode, config) {
   }
 
   // 构建请求负载、请求头、请求 URL
-  var body = buildPayload(prompt, modelId, thinkMode, config);
+  var body = buildPayload(prompt, modelId, thinkMode, config, extraFields);
   var headers = await buildHeaders(config);
   var url = buildUrl(config);
 
@@ -837,13 +848,83 @@ export function messagesToPrompt(messages, tools) {
   return parts.filter(function (p) { return p; }).join('\n\n');
 }
 
+// 🛠️ 工具调用解析辅助
+//
+// 从 OpenAI tools 列表中提取已声明的函数名。
+// 兼容两种格式:
+//   1. { type: "function", function: { name, ... } }
+//   2. { name, ... }（简写格式）
+//
+// @param {Array} tools - OpenAI 格式的工具定义列表
+// @returns {Set<string>} 已声明的工具名集合
+export function toolNames(tools) {
+  var names = new Set();
+  if (!tools || !tools.length) return names;
+  for (var i = 0; i < tools.length; i++) {
+    var tool = tools[i];
+    if (!tool || typeof tool !== 'object') continue;
+    var fn = (tool.type === 'function' && tool.function) ? tool.function : tool;
+    if (fn && typeof fn === 'object' && fn.name) names.add(fn.name);
+  }
+  return names;
+}
+
+/**
+ * 校验一个候选对象是否为 {"name": ..., "arguments": {...}} 形状。
+ * arguments 兼容字符串与 args 键名（模型实际输出时的变体）。
+ *
+ * @param {*} data - 待校验的已解析 JSON 值
+ * @returns {Object|null} { name, arguments } 或 null（不是合法的工具调用）
+ */
+function coerceToolData(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  var name = data.name;
+  if (!name || typeof name !== 'string') return null;
+  var args = data.arguments !== undefined ? data.arguments : (data.args !== undefined ? data.args : {});
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch (e) { args = {}; }
+  }
+  if (!args || typeof args !== 'object' || Array.isArray(args)) args = {};
+  return { name: name, arguments: args };
+}
+
+/**
+ * 解析方括号简写格式的参数，容忍模型多打的一个右花括号。
+ * 例如: { "filePath": "a" }} → { "filePath": "a" }
+ *
+ * @param {string} raw - 花括号包裹的参数文本
+ * @returns {Object|null} 解析后的参数对象，失败返回 null
+ */
+function parseBracketArgs(raw) {
+  try { return JSON.parse(raw); } catch (e) {}
+  var trimmed = raw.replace(/\s+$/, '');
+  if (trimmed.charAt(trimmed.length - 1) === '}') {
+    try { return JSON.parse(trimmed.slice(0, -1)); } catch (e) {}
+  }
+  return null;
+}
+
+/**
+ * 安全的 JSON 解析：任何失败（含非字符串输入）都返回 null，不抛异常。
+ */
+function safeJsonParse(raw) {
+  if (typeof raw !== 'string') return null;
+  try { return JSON.parse(raw.trim()); } catch (e) { return null; }
+}
+
 /**
  * 从响应文本中解析工具调用
  * 
- * 工具调用格式（在响应文本中）:
- * ```tool_call
- * {"name": "get_weather", "arguments": {"city": "Beijing"}}
- * ```
+ * 实际场景中模型会以多种格式输出工具调用，本函数全部兼容：
+ *   1. ```tool_call\n{...}\n```        （规范格式，提示词中约定的）
+ *   2. ```function_call\n{...}\n```    （常见变体）
+ *   3. ```json\n{"name": ...}\n```     （裸 JSON 围栏，需含 name 键）
+ *   4. [tool_call: name {...}]         （方括号简写）
+ *   5. 整段文本就是一个 {"name": ..., "arguments"/"args": {...}} 对象
+ * 
+ * 无法解析为工具调用的围栏（例如真正的 ```json 代码示例）保持原样不动。
+ * 传入 validNames 时，调用未声明工具的输出会被整体丢弃，
+ * 避免客户端因幻觉出的工具名而报错。
  * 
  * 解析后转换为 OpenAI 格式的工具调用对象:
  * {
@@ -856,45 +937,89 @@ export function messagesToPrompt(messages, tools) {
  * }
  * 
  * @param {string} text - 可能包含工具调用的响应文本
+ * @param {Set<string>} [validNames] - 已声明的工具名集合；传入时过滤幻觉工具
  * @returns {Object} { cleanText: 清理后的纯文本, toolCalls: 工具调用数组 }
  */
-export function parseToolCalls(text) {
-  var toolCalls = [];
+export function parseToolCalls(text, validNames) {
+  var spans = []; // [{ start, end, data: { name, arguments } }]
 
-  // 正则匹配 tool_call 代码块
-  // /```tool_call\s*\n(.*?)\n```/gs
-  // g: 全局匹配（查找所有匹配项，而非只找第一个）
-  // s: dotAll 模式（允许 . 匹配换行符 \n）
-  var pattern = /```tool_call\s*\n(.*?)\n```/gs;
-  var match;
+  // 从各类围栏代码块中收集候选工具调用
+  var collect = function (pattern) {
+    var m;
+    while ((m = pattern.exec(text)) !== null) {
+      var data = coerceToolData(safeJsonParse(m[1]));
+      if (data) spans.push({ start: m.index, end: m.index + m[0].length, data: data });
+      if (m.index === pattern.lastIndex) pattern.lastIndex++; // 防止零长匹配死循环
+    }
+  };
 
-  // 循环提取所有工具调用
-  while ((match = pattern.exec(text)) !== null) {
-    try {
-      // match[1] 是第一个捕获组，即 tool_call 代码块中的 JSON 内容
-      var data = JSON.parse(match[1].trim());
+  // 1-3: 围栏格式（tool_call / function_call / json）
+  collect(/```tool_call\s*\n(.*?)\n```/gs);
+  collect(/```function_call\s*\n(.*?)\n```/gs);
+  collect(/```json\s*\n(.*?)\n```/gs);
 
-      // 构建 OpenAI 格式的工具调用对象
-      toolCalls.push({
-        id: 'call_' + generateShortId(8),       // 生成唯一的调用 ID
-        type: 'function',
-        function: {
-          name: data.name,                       // 函数名
-          arguments: JSON.stringify(data.arguments || {}),  // 参数（必须是 JSON 字符串）
-        },
-      });
-    } catch (e) {
-      // JSON 解析失败，跳过格式有误的代码块
-      // 不中断整个解析过程
+  // 4: 方括号简写 [tool_call: name {...}]
+  var bracket = /\[tool_call\s*:\s*([A-Za-z0-9_.\-]+)\s*(\{.*\})\s*\]/gs;
+  var bm;
+  while ((bm = bracket.exec(text)) !== null) {
+    var bargs = parseBracketArgs(bm[2].trim());
+    if (bargs !== null) {
+      var bdata = coerceToolData({ name: bm[1], arguments: bargs });
+      if (bdata) spans.push({ start: bm.index, end: bm.index + bm[0].length, data: bdata });
     }
   }
 
-  // 从文本中移除所有 tool_call 代码块
-  var cleanText = text.replace(pattern, '').trim();
+  // 按出现位置排序，丢弃重叠区间（保留最早的匹配）
+  spans.sort(function (a, b) { return (a.start - b.start) || (a.end - b.end); });
+  var merged = [];
+  for (var si = 0; si < spans.length; si++) {
+    if (merged.length > 0 && spans[si].start < merged[merged.length - 1].end) continue;
+    merged.push(spans[si]);
+  }
+
+  // 从文本中移除所有工具调用片段，并构建 OpenAI 格式的调用对象
+  var cleanParts = [];
+  var lastEnd = 0;
+  var toolCalls = [];
+  for (var mi = 0; mi < merged.length; mi++) {
+    var span = merged[mi];
+    cleanParts.push(text.slice(lastEnd, span.start));
+    lastEnd = span.end;
+    // 幻觉出的工具名：从文本中移除，但不作为工具调用返回
+    if (validNames && !validNames.has(span.data.name)) continue;
+    toolCalls.push({
+      id: 'call_' + generateShortId(8),       // 生成唯一的调用 ID
+      type: 'function',
+      function: {
+        name: span.data.name,                 // 函数名
+        arguments: JSON.stringify(span.data.arguments),  // 参数（必须是 JSON 字符串）
+      },
+    });
+  }
+  cleanParts.push(text.slice(lastEnd));
+
+  // 5: 兜底 —— 整段文本就是一个裸 {"name": ..., "arguments"/"args": {...}} 对象
+  if (toolCalls.length === 0) {
+    var stripped = text.trim();
+    if (stripped.charAt(0) === '{' && stripped.charAt(stripped.length - 1) === '}') {
+      var fallback = coerceToolData(safeJsonParse(stripped));
+      if (fallback && (!validNames || validNames.has(fallback.name))) {
+        toolCalls.push({
+          id: 'call_' + generateShortId(8),
+          type: 'function',
+          function: {
+            name: fallback.name,
+            arguments: JSON.stringify(fallback.arguments),
+          },
+        });
+        return { cleanText: '', toolCalls: toolCalls };
+      }
+    }
+  }
 
   return {
-    cleanText: cleanText,    // 清理后的纯文本
-    toolCalls: toolCalls     // 工具调用数组
+    cleanText: cleanParts.join('').trim(),   // 清理后的纯文本
+    toolCalls: toolCalls                     // 工具调用数组
   };
 }
 

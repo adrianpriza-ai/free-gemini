@@ -195,12 +195,10 @@ test('handleRequestSafe 502 deadline message carries actionable hints', async ()
   }
 });
 
-// =====================================================================
 // 429 attribution: a real upstream 429 must surface as "HTTP 429: ...
 // 请添加有效的 Cookie 或降低请求频率", never as the generic
 // upstream_timeout 502. Regression for the Retry-After wait eating the
 // deadline budget and masking the 429.
-// =====================================================================
 
 /**
  * fetch() stub that answers every call with a 429 response.
