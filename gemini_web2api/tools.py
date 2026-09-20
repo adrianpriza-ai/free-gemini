@@ -168,30 +168,133 @@ def messages_to_prompt(messages: list, tools: list = None, tool_choice=None) -> 
     return prompt, images
 
 
-def parse_tool_calls(text: str) -> tuple:
-    """Extract tool_call blocks. Returns (clean_text, tool_calls_list)."""
-    tool_calls = []
-    pattern = r'```tool_call\s*\n(.*?)\n```'
+def tool_names(tools: list) -> set:
+    """Extract declared function names from an OpenAI tools list."""
+    names = set()
+    for tool in tools or []:
+        fn = tool.get("function", tool) if tool.get("type") == "function" else tool
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if name:
+            names.add(name)
+    return names
+
+
+def _coerce_tool_data(data) -> dict | None:
+    """Validate a parsed candidate as {"name": ..., "arguments": {...}}."""
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    if not name or not isinstance(name, str):
+        return None
+    args = data.get("arguments", data.get("args", {}))
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except (json.JSONDecodeError, ValueError):
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+    return {"name": name, "arguments": args}
+
+
+def _parse_bracket_args(raw: str):
+    """Parse bracket-shorthand args, tolerating a trailing extra brace."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    if raw.rstrip().endswith("}"):
+        try:
+            return json.loads(raw.rstrip()[:-1])
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
+def parse_tool_calls(text: str, valid_names: set = None) -> tuple:
+    """Extract tool_call blocks. Returns (clean_text, tool_calls_list).
+
+    Accepts the formats models emit in practice:
+    1. ```tool_call\\n{"name": ..., "arguments": {...}}\\n``` (canonical)
+    2. ```function_call\\n{...}\\n``` (common variant)
+    3. ```json\\n{"name": ..., "arguments": {...}}\\n``` (bare JSON fence)
+    4. [tool_call: name {...}] (bracket shorthand)
+    5. Raw {"name": ..., "arguments"/"args": {...}} object
+
+    Fences that do not parse as a tool call (e.g. a legit ```json code
+    sample) are left untouched. When valid_names is given, calls to
+    undeclared tools are dropped so clients don't choke on hallucinated
+    tool names.
+    """
+    spans = []  # (start, end, {"name":..., "arguments":...})
+
+    def _collect(pattern, group=1):
+        for m in re.finditer(pattern, text, re.DOTALL):
+            data = _coerce_tool_data(_safe_json_loads(m.group(group)))
+            if data:
+                spans.append((m.start(), m.end(), data))
+
+    _collect(r'```tool_call\s*\n(.*?)\n```')
+    _collect(r'```function_call\s*\n(.*?)\n```')
+    _collect(r'```json\s*\n(.*?)\n```')
+
+    for m in re.finditer(r'\[tool_call\s*:\s*([A-Za-z0-9_.\-]+)\s*(\{.*\})\s*\]',
+                         text, re.DOTALL):
+        args = _parse_bracket_args(m.group(2).strip())
+        if args is not None:
+            data = _coerce_tool_data({"name": m.group(1), "arguments": args})
+            if data:
+                spans.append((m.start(), m.end(), data))
+
+    spans.sort()
+    # Drop overlapping spans (keep the earliest match).
+    merged = []
+    for span in spans:
+        if merged and span[0] < merged[-1][1]:
+            continue
+        merged.append(span)
+
     clean_parts = []
     last_end = 0
-    for m in re.finditer(pattern, text, re.DOTALL):
-        clean_parts.append(text[last_end:m.start()])
-        last_end = m.end()
-        try:
-            data = json.loads(m.group(1).strip())
-            tool_calls.append({
-                "id": f"call_{uuid.uuid4().hex[:8]}",
-                "type": "function",
-                "function": {
-                    "name": data["name"],
-                    "arguments": json.dumps(data.get("arguments", {}), ensure_ascii=False),
-                },
-            })
-        except (json.JSONDecodeError, KeyError):
-            pass
+    tool_calls = []
+    for start, end, data in merged:
+        clean_parts.append(text[last_end:start])
+        last_end = end
+        if valid_names is not None and data["name"] not in valid_names:
+            continue
+        tool_calls.append({
+            "id": f"call_{uuid.uuid4().hex[:8]}",
+            "type": "function",
+            "function": {
+                "name": data["name"],
+                "arguments": json.dumps(data["arguments"], ensure_ascii=False),
+            },
+        })
     clean_parts.append(text[last_end:])
-    clean = "".join(clean_parts).strip()
-    return clean, tool_calls
+
+    if not tool_calls:
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            data = _coerce_tool_data(_safe_json_loads(stripped))
+            if data and (valid_names is None or data["name"] in valid_names):
+                tool_calls.append({
+                    "id": f"call_{uuid.uuid4().hex[:8]}",
+                    "type": "function",
+                    "function": {
+                        "name": data["name"],
+                        "arguments": json.dumps(data["arguments"], ensure_ascii=False),
+                    },
+                })
+                return "", tool_calls
+
+    return "".join(clean_parts).strip(), tool_calls
+
+
+def _safe_json_loads(raw: str):
+    try:
+        return json.loads(raw.strip())
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        return None
 
 
 # ─── Google Native API helpers ─────────────────────────────────────────────────

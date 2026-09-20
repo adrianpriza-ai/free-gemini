@@ -9,7 +9,7 @@ from socketserver import ThreadingMixIn
 from .config import CONFIG
 from .models import MODELS, resolve_model
 from .gemini import generate, generate_stream, log
-from .tools import messages_to_prompt, parse_tool_calls, google_contents_to_prompt, parse_google_function_calls
+from .tools import messages_to_prompt, parse_tool_calls, google_contents_to_prompt, parse_google_function_calls, tool_names
 from .multimodal import detect_image_mime, fetch_image_bytes, upload_image
 from . import __version__
 
@@ -173,6 +173,37 @@ class GeminiHandler(BaseHTTPRequestHandler):
 
     # ─── /v1/chat/completions ─────────────────────────────────────────────────
 
+    def _chunk(self, cid, model_name, delta, finish_reason=None):
+        return {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
+                "model": model_name,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}]}
+
+    def _stream_tool_calls(self, cid, model_name, tool_calls, arg_slice=120):
+        """Emit tool calls as OpenAI-spec streaming deltas.
+
+        Each call gets an `index` (required by clients to assemble split
+        arguments), followed by argument slices, then a `tool_calls`
+        finish chunk.
+        """
+        self.wfile.write(
+            f"data: {json.dumps(self._chunk(cid, model_name, {'role': 'assistant'}), ensure_ascii=False)}\n\n".encode())
+        for i, tc in enumerate(tool_calls):
+            fn = tc.get("function", {})
+            head = {"role": "assistant",
+                    "tool_calls": [{"index": i, "id": tc.get("id"), "type": "function",
+                                    "function": {"name": fn.get("name", ""), "arguments": ""}}]}
+            self.wfile.write(
+                f"data: {json.dumps(self._chunk(cid, model_name, head), ensure_ascii=False)}\n\n".encode())
+            args = fn.get("arguments", "") or ""
+            for j in range(0, len(args), arg_slice):
+                piece = {"tool_calls": [{"index": i, "function": {"arguments": args[j:j + arg_slice]}}]}
+                self.wfile.write(
+                    f"data: {json.dumps(self._chunk(cid, model_name, piece), ensure_ascii=False)}\n\n".encode())
+        self.wfile.write(
+            f"data: {json.dumps(self._chunk(cid, model_name, {}, 'tool_calls'))}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
     def _handle_chat(self, body: bytes):
         req = self._parse_body(body)
         if req is None:
@@ -239,7 +270,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
 
         tool_calls = None
         if tools and text and tool_choice != "none":
-            text, tool_calls = parse_tool_calls(text)
+            text, tool_calls = parse_tool_calls(text, tool_names(tools))
         msg = {"role": "assistant", "content": text or None}
         if tool_calls:
             msg["tool_calls"] = tool_calls
@@ -247,11 +278,14 @@ class GeminiHandler(BaseHTTPRequestHandler):
 
         if stream:
             self._start_sse()
-            chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
-                     "model": model_name, "choices": [{"index": 0, "delta": msg, "finish_reason": finish}]}
-            self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode())
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
+            if tool_calls:
+                self._stream_tool_calls(cid, model_name, tool_calls)
+            else:
+                chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
+                         "model": model_name, "choices": [{"index": 0, "delta": msg, "finish_reason": finish}]}
+                self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
         else:
             self.send_json({
                 "id": cid, "object": "chat.completion", "created": int(time.time()),
@@ -332,7 +366,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
 
         tool_calls = None
         if tools and text and tool_choice != "none":
-            text, tool_calls = parse_tool_calls(text)
+            text, tool_calls = parse_tool_calls(text, tool_names(tools))
 
         rid = f"resp_{uuid.uuid4().hex[:16]}"
         mid = f"msg_{uuid.uuid4().hex[:12]}"

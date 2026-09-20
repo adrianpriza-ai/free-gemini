@@ -6,11 +6,15 @@
 MODELS = {
     "gemini-3.8-flash": {
         "mode": 1, "think": 4,
-        "desc": "Newest all-around model (Gemini 3.8 Flash)",
+        "desc": "Latest workhorse model, best reasoning & coding (Sep 2026)",
+    },
+    "gemini-3.8-flash-thinking": {
+        "mode": 2, "think": 0,
+        "desc": "Deep thinking mode on the latest Flash backend",
     },
     "gemini-3.7-flash": {
         "mode": 1, "think": 4,
-        "desc": "Latest all-around model (Gemini 3.7 Flash)",
+        "desc": "All-around model (Gemini 3.7 Flash)",
     },
     "gemini-3.6-flash": {
         "mode": 1, "think": 4,
@@ -18,7 +22,15 @@ MODELS = {
     },
     "gemini-3.5-flash": {
         "mode": 1, "think": 4,
-        "desc": "Alias for gemini-3.6-flash (backend upgraded)",
+        "desc": "All-around model (Gemini 3.5 Flash)",
+    },
+    "gemini-3.5-flash-lite": {
+        "mode": 6, "think": 4,
+        "desc": "Cost-efficient high-capacity model (Gemini 3.5 Flash-Lite)",
+    },
+    "gemini-3.1-flash-lite": {
+        "mode": 6, "think": 4,
+        "desc": "Cost-efficient high-capacity model (Gemini 3.1 Flash-Lite)",
     },
     "gemini-3.5-flash-thinking": {
         "mode": 2, "think": 0,
