@@ -748,7 +748,7 @@ export function extractResponseText(raw) {
  * │ assistant    │ [Assistant]: {content}                   │
  * │ tool         │ [Tool result for {name}]: {content}      │
  * │ user         │ {content}（直接使用）                    │
- * │ 工具调用      │ ```tool_call\n{json}\n``` 代码块格式     │
+ * │ 工具调用     │ ```tool_call\n{json}\n``` 代码块格式     │
  * └──────────────┴──────────────────────────────────────────┘
  * 
  * 多条消息之间使用双换行（\n\n）分隔。

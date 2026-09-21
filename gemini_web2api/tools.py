@@ -297,7 +297,7 @@ def _safe_json_loads(raw: str):
         return None
 
 
-# ─── Google Native API helpers ─────────────────────────────────────────────────
+# --- Google Native API helpers
 
 
 def build_tool_prompt(tool_defs: list) -> str:

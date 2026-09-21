@@ -26,6 +26,42 @@ import {
 import { geminiFetch, globalProxyState, refreshProxyPool } from './proxy.js';
 import { sendJSON, sendSSE, resolveModel } from './http.js';
 
+// 🛡️ 空响应防护 - 上游返回 200 但正文无可提取文本
+//
+// Gemini 对匿名 / 数据中心出口 IP（Deno Deploy 的共享边缘 IP 是典型场景）
+// 会静默限流：以 200 + 空正文（或不含任何可提取文本的正文）作答，而不是
+// 返回 429/5xx。extractResponseText 对这类正文返回空字符串，若直接沿用，
+// 上层会把"上游失败"当成"成功的空回答"返回 200 —— 客户端只收到
+// { content: null, completion_tokens: 0, finish_reason: 'stop' }，
+// 既拿不到答案，也看不到任何可定位的错误。
+//
+// 这里把空正文提升为显式错误：调用方的 catch 会转成带指引的 502，
+// 而不是伪造一个成功的空响应。
+//
+// Empty-response guard. Gemini silently throttles anonymous / datacenter
+// egress (Deno Deploy's shared edge IPs are the common case) by answering 200
+// with an empty body — or a body with no extractable text — instead of
+// 429/5xx. extractResponseText yields '' for such bodies; passing it through
+// made the caller return 200 { content: null, completion_tokens: 0 }, i.e. a
+// bogus successful empty completion that hides the real upstream failure.
+// Promote it to an explicit error so the caller's catch turns it into an
+// actionable 502.
+//
+// @param {string} raw - Gemini StreamGenerate 原始响应文本
+// @returns {string} 提取出的非空文本
+// @throws {Error} 上游返回空响应时抛出（调用方应转为 502）
+function extractRequiredText(raw) {
+  var text = extractResponseText(raw);
+  if (text.trim()) return text;
+  throw new Error(
+    'Gemini 返回空响应（无可提取文本）。这通常是上游对当前出口 IP 的静默限流：' +
+    '请设置 COOKIE_STRING（最有效），或启用 ENABLE_PROXY=true / HTTPS_PROXY 更换出口 IP；' +
+    '若已配置 Cookie 仍出现，请降低请求频率。 ' +
+    'Empty upstream response (no extractable text) — usually silent throttling of this egress IP: ' +
+    'set COOKIE_STRING (most effective), or enable ENABLE_PROXY=true / HTTPS_PROXY to rotate egress.',
+  );
+}
+
 // 📋 流式工具调用 - OpenAI 规范的增量块
 //
 // gemini_web2api/server.py 中 _stream_tool_calls 的等价实现。
@@ -174,8 +210,8 @@ export async function handleChatCompletions(request, body, config) {
       // 调用 Gemini API 获取完整响应
       var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config, extraFields);
 
-      // 提取并清理响应文本
-      var text = extractResponseText(raw);
+      // 提取并清理响应文本（空正文视为上游失败，转 502，见 extractRequiredText）
+      var text = extractRequiredText(raw);
       var toolCalls = null;
 
       // 如果启用了工具，解析工具调用（validNames 过滤幻觉出的工具名）
@@ -183,6 +219,17 @@ export async function handleChatCompletions(request, body, config) {
         var parsed = parseToolCalls(text, toolNames(tools));
         text = parsed.cleanText;
         toolCalls = parsed.toolCalls.length > 0 ? parsed.toolCalls : null;
+      }
+
+      // 🛡️ 与 extractRequiredText 同一不变量：绝不返回 200 + content: null。
+      // 工具解析可能把整段文本当作幻觉工具调用剥离，最终既无文本也无
+      // tool_calls —— 同样按上游失败处理，而不是伪造一个成功的空消息。
+      // Same invariant as extractRequiredText: never return 200 with a null
+      // content. Tool parsing can strip the whole text as a hallucinated call,
+      // leaving neither text nor tool_calls — treat that as an upstream
+      // failure too instead of a bogus successful empty message.
+      if (!toolCalls && !text.trim()) {
+        throw new Error('Gemini 返回的响应没有可用文本或工具调用（可能被上游限流或工具解析失败）。Empty upstream response: no usable text or tool_calls.');
       }
 
       // 构建响应消息
@@ -472,6 +519,7 @@ export async function handleChatCompletions(request, body, config) {
           var decoder = new TextDecoder();
           var buffer = '';      // 行缓冲区（处理不完整的行）
           var prevText = '';    // 记录之前已发送的完整文本
+          var emittedAny = false; // 是否已向客户端发送过任何内容（见下方空响应防护）
 
           while (true) {
             var readResult = await reader.read();
@@ -536,6 +584,7 @@ export async function handleChatCompletions(request, body, config) {
                                 finish_reason: null
                               }],
                             }) + '\n\n'));
+                            emittedAny = true;
                           }
                           // 更新已发送的文本记录
                           prevText = t;
@@ -551,7 +600,24 @@ export async function handleChatCompletions(request, body, config) {
             }
           }
 
-          // -- 第五步：正常结束流
+          // -- 第五步：空响应防护后正常结束流
+          //
+          // 与非流式路径（extractRequiredText）同一不变量：上游以 200 +
+          // 空正文（或无可提取文本的正文）静默限流时，整条流会没有任何
+          // 内容块。此时必须报错，而不是发一个空的 finish_reason: 'stop'，
+          // 否则客户端同样只看到一个"成功的空回答"。
+          // Same invariant as the non-streaming path: when the upstream
+          // silently throttles with a 200 + empty (or text-free) body, the
+          // whole stream carries no content chunk — surface an error instead
+          // of an empty finish_reason: 'stop'.
+          if (!emittedAny) {
+            throw new Error(
+              'Gemini 返回空响应（流中无可提取文本）。这通常是上游对当前出口 IP 的静默限流：' +
+              '请设置 COOKIE_STRING（最有效），或启用 ENABLE_PROXY=true / HTTPS_PROXY 更换出口 IP。 ' +
+              'Empty upstream stream (no extractable text) — usually silent throttling of this egress IP: ' +
+              'set COOKIE_STRING (most effective), or enable ENABLE_PROXY=true / HTTPS_PROXY to rotate egress.',
+            );
+          }
           finishStream('stop');
 
         } catch (error) {
@@ -689,7 +755,7 @@ export async function handleResponses(request, body, config) {
   try {
     // 调用 Gemini API
     var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config, extraFields);
-    var text = extractResponseText(raw);
+    var text = extractRequiredText(raw);
     var toolCalls = null;
 
     // 解析工具调用（validNames 过滤幻觉出的工具名）
@@ -788,7 +854,7 @@ export async function handleGoogleAPI(request, body, stream, config) {
 
   try {
     var raw = await geminiStreamGenerate(prompt, modelId, thinkMode, config, extraFields);
-    var text = extractResponseText(raw);
+    var text = extractRequiredText(raw);
 
     // 构建 Google 格式的响应
     var response = {

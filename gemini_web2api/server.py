@@ -171,7 +171,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
             except:
                 pass
 
-    # ─── /v1/chat/completions ─────────────────────────────────────────────────
+    # --- /v1/chat/completions
 
     def _chunk(self, cid, model_name, delta, finish_reason=None):
         return {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
@@ -295,7 +295,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
                           "total_tokens": (len(prompt)+len(text or ""))//4},
             })
 
-    # ─── /v1/responses (Codex CLI) ───────────────────────────────────────────
+    # --- /v1/responses (Codex CLI)
 
     def _handle_responses(self, body: bytes):
         req = self._parse_body(body)
@@ -519,7 +519,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
                             "model": model_name, "output": output,
                             "usage": {"input_tokens": len(prompt)//4, "output_tokens": len(text or "")//4, "total_tokens": (len(prompt)+len(text or ""))//4}})
 
-    # ─── /v1beta/models (Google Gemini CLI) ──────────────────────────────────
+    # --- /v1beta/models (Google Gemini CLI)
 
     def _handle_google_generate(self, body: bytes, stream: bool):
         req = self._parse_body(body)

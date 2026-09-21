@@ -43,9 +43,9 @@ try:
 except ImportError:
     HAS_HTTPX = False
 
-__version__ = "1.1.0"
+__version__ = "1.5.0"
 
-# ─── Configuration ───────────────────────────────────────────────────────────
+# --- Configuration
 
 DEFAULT_CONFIG = {
     "port": 8081,
@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
 
 CONFIG = dict(DEFAULT_CONFIG)
 
-# ─── Models ──────────────────────────────────────────────────────────────────
+# --- Models
 # Mapping from JS source: MODE_CATEGORY enum (028-6eb337387583.js)
 #   1=FAST, 2=THINKING, 3=PRO, 4=AUTO, 5=FAST_DYNAMIC_THINKING, 6=FLASH_LITE
 
@@ -109,7 +109,7 @@ MODELS = {
     },
 }
 
-# ─── Utilities ───────────────────────────────────────────────────────────────
+# --- Utilities
 
 def log(msg: str):
     if CONFIG["log_requests"]:
@@ -222,7 +222,7 @@ def upload_images(images: list) -> list:
     return file_refs if file_refs else None
 
 
-# ─── Gemini Protocol ─────────────────────────────────────────────────────────
+# --- Gemini Protocol
 
 def gemini_stream_generate(prompt: str, model_id: int, think_mode: int, file_refs: list = None) -> str:
     """Send prompt to Gemini StreamGenerate with retry."""
@@ -467,7 +467,7 @@ def extract_response_text(raw: str) -> str:
     return clean_gemini_text(text)
 
 
-# ─── OpenAI Format Helpers ───────────────────────────────────────────────────
+# --- OpenAI Format Helpers
 
 PROMPT_MAX_BYTES = 60000
 
@@ -640,7 +640,7 @@ def parse_tool_calls(text: str) -> tuple:
     return clean, tool_calls
 
 
-# ─── HTTP Handler ────────────────────────────────────────────────────────────
+# --- HTTP Handler
 
 class GeminiHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -974,7 +974,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
                             "usage": {"input_tokens": len(prompt)//4, "output_tokens": len(text)//4, "total_tokens": (len(prompt)+len(text))//4}})
 
 
-    # ─── Google Native API (Gemini CLI compatible) ────────────────────────────
+    # --- Google Native API (Gemini CLI compatible)
 
     def _parse_google_model_from_path(self):
         """Extract model name from /v1beta/models/{model}:method path."""
@@ -1048,7 +1048,7 @@ class GeminiHandler(BaseHTTPRequestHandler):
             self.send_json(response_obj)
 
 
-# ─── Main ────────────────────────────────────────────────────────────────────
+# --- Main
 
 def load_config(path: str):
     if path and os.path.exists(path):
